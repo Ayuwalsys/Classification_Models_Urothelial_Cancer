@@ -1,0 +1,536 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(Cardinal)
+library(ggplot2)
+```
+
+# Data import 
+
+```{r load-analyze-files}
+TMA1 <- readImzML("~/Documents/Fall_Semester_24/DS_5500_capstone/DS5500_Project/Capstone_project/dataset/TMA1.imzML")
+TMA2 <- readImzML("~/Documents/Fall_Semester_24/DS_5500_capstone/DS5500_Project/Capstone_project/dataset/TMA2.imzML")
+```
+
+plot(TMA1, mz=1000.5, tolerance=0.1)
+
+
+
+```{r viz_analyze_files}
+TMA1 
+TMA2 
+```
+
+```{r load-spectra-annotations}
+TMA1_annotations <- read.delim("~/Documents/Fall_Semester_24/DS_5500_capstone/DS5500_Project/Capstone_project/dataset/TMA1_annotations.txt", header = TRUE, stringsAsFactors = FALSE)
+TMA2_annotations <- read.delim("~/Documents/Fall_Semester_24/DS_5500_capstone/DS5500_Project/Capstone_project/dataset/TMA2_annotations.txt", header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+
+```{r vis_spectra_annotations}
+
+head(TMA1_annotations)
+head(TMA2_annotations)
+
+```
+
+
+```{r}
+library(dplyr)
+
+plot_tissue_info <- function(annotations, plot_type = "diagnosis") {
+  # Ensure annotations are ordered correctly
+  annotations <- annotations %>% arrange(y, x)
+  
+  # Create the plot data
+  plot_data <- annotations %>%
+    select(x, y, diagnosis, histology, invasiveness)
+  
+  # Determine fill based on plot type
+  fill_var <- sym(plot_type)
+  fill_label <- capitalize(plot_type)
+  
+  # Create the plot
+  ggplot(plot_data, aes(x = x, y = y, fill = !!fill_var)) +
+    geom_tile() +
+    scale_fill_viridis_d() +
+    theme_minimal() +
+    labs(title = paste("Tissue", fill_label),
+         x = "X coordinate",
+         y = "Y coordinate",
+         fill = fill_label) +
+    coord_fixed(ratio = 1) +  # This ensures squares are square
+    theme(legend.position = "right")
+}
+
+# Helper function to capitalize first letter
+capitalize <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  x
+}
+
+# Plot for TMA1
+plot_tissue_info(TMA1_annotations, "diagnosis")
+plot_tissue_info(TMA1_annotations, "histology")
+plot_tissue_info(TMA1_annotations, "invasiveness")
+
+# Plot for TMA2
+plot_tissue_info(TMA2_annotations, "diagnosis")
+plot_tissue_info(TMA2_annotations, "histology")
+plot_tissue_info(TMA2_annotations, "invasiveness")
+
+```
+
+
+## Smooth tissue images
+```{r}
+smooth_TMA1 <- smooth(TMA1, method="gaussian", width=3)
+plot(smooth_TMA1, mz=1000.5, tolerance=0.1)
+
+```
+
+```{r}
+smooth_TMA2 <- smooth(TMA2, method="gaussian", width=3)
+plot(smooth_TMA1, mz=1000.5, tolerance=0.1)
+# For PNG format
+#png("smoothed_TMA2_plot.png", width=800, height=600)  # Width and height in pixels
+```
+ 
+
+a. Generate single m/z images:
+```{r}
+
+# For TMA1
+plot(TMA1, mz=1000.5, tolerance=0.1)
+
+# For TMA2
+#plot(TMA2, mz=1000.5, tolerance=0.1)
+
+```
+
+
+```{r}
+# Plot spectra from specific pixels
+plot(TMA1, coord = list(c(75, 60), c(100, 80)))
+```
+
+
+```{r} 
+#### not working review later
+
+# library(Cardinal)
+# library(ggplot2)
+# library(dplyr)
+
+# # Helper function
+# capitalize <- function(x) {
+#   substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+#   x
+# }
+
+# # Define the plot_overlay function
+# plot_overlay <- function(msi_data, annotations, mz_value, tolerance = 0.1, plot_type = "diagnosis") {
+#   # Extract coordinates and intensities
+#   coords <- coord(msi_data)
+#   mz_index <- which.min(abs(mz(msi_data) - mz_value))
+#   intensities <- iData(msi_data, mz=mz_index)
+  
+#   # Ensure annotations are ordered correctly
+#   annotations <- annotations[order(annotations$y, annotations$x), ]
+  
+#   # Combine data
+#   plot_data <- data.frame(
+#     x = coords$x,
+#     y = coords$y,
+#     intensity = intensities,
+#     diagnosis = annotations$diagnosis,
+#     histology = annotations$histology,
+#     invasiveness = annotations$invasiveness
+#   )
+  
+#   # Determine fill based on plot type
+#   fill_var <- plot_data[[plot_type]]
+#   fill_label <- capitalize(plot_type)
+  
+#   # Create the plot
+#   ggplot(plot_data, aes(x = x, y = y)) +
+#     geom_tile(aes(fill = intensity)) +
+#     geom_tile(aes(alpha = fill_var), fill = "red") +
+#     scale_fill_viridis_c() +
+#     scale_alpha_manual(values = c(0.2, 0.5)) +
+#     theme_minimal() +
+#     labs(title = paste("Tissue", fill_label, "Overlay (m/z", mz_value, ")"),
+#          x = "X coordinate",
+#          y = "Y coordinate",
+#          fill = "Intensity",
+#          alpha = fill_label) +
+#     coord_fixed(ratio = 1) +
+#     theme(legend.position = "right")
+# }
+```
+
+```{r}
+# Now try plotting for TMA2
+# plot_overlay(TMA2, TMA2_annotations, mz_value = 1000.5, plot_type = "diagnosis")
+# plot_overlay(TMA2, TMA2_annotations, mz_value = 1000.5, plot_type = "histology")
+# plot_overlay(TMA2, TMA2_annotations, mz_value = 1000.5, plot_type = "invasiveness")
+# ````
+
+This code creates two main functions:
+
+1. `plot_tissue_info()`: This function visualizes the tissue information (diagnosis, histology, or invasiveness) without the ion image overlay.
+
+2. `plot_overlay()`: This function creates an overlay of the tissue information on top of an ion image for a specified m/z value.
+
+You can run these functions for both TMA1 and TMA2 to generate the visualizations. Remember to adjust the `mz_value` in the overlay plots if you want to visualize different m/z peaks.
+
+To save the plots, you can use:
+
+````r
+ggsave("TMA1_diagnosis.png", width = 10, height = 8)
+````
+
+If you need any modifications or encounter any issues, please let me know, and I'll be happy to help you refine the visualizations further.
+````
+
+
+```
+
+
+
+
+
+# Preparing raw and metadata
+
+First we filter the annotation data to remove all spectra that are not part of tumor or stroma tissues.
+
+```{r prepare-spectra-annotations}
+
+# Keeping only spectra annotations with tumor or stroma annotation in each TMA
+TMA1_tumor_stroma <- TMA1_annotations[TMA1_annotations$histology == "Stroma" | TMA1_annotations$histology == "Tumor",]
+TMA2_tumor_stroma <- TMA2_annotations[TMA2_annotations$histology == "Stroma" | TMA2_annotations$histology == "Tumor",]
+
+```
+
+
+```{r metadata-filtering}
+# Generation of a logical vector that indicates for each spectrum if it has a tumor / stroma annotation or not
+
+# For TMA1
+coord_TMA1 <- coord(TMA1)
+coord_string_TMA1 <- paste(coord_TMA1$x, coord_TMA1$y, sep="_")
+annotation_string_TMA1 <- paste(TMA1_tumor_stroma$x, TMA1_tumor_stroma$y, sep="_")
+annotated_spectra_TMA1 <- coord_string_TMA1 %in% annotation_string_TMA1
+
+# For TMA2
+coord_TMA2 <- coord(TMA2)
+coord_string_TMA2 <- paste(coord_TMA2$x, coord_TMA2$y, sep="_")
+annotation_string_TMA2 <- paste(TMA2_tumor_stroma$x, TMA2_tumor_stroma$y, sep="_")
+annotated_spectra_TMA2 <- coord_string_TMA2 %in% annotation_string_TMA2
+
+```
+
+
+# Filtering to keep only spectra that have a tumor / stroma annotation
+```{r prepare-spectra-annotations}
+
+# Filtering
+# For TMA1
+TMA1_ROIs <- subset(TMA1, annotated_spectra_TMA1)
+
+# For TMA2
+TMA2_ROIs <- subset(TMA2, annotated_spectra_TMA2)
+
+```
+
+
+```{r prepare-spectra-annotations}
+
+print(TMA1_ROIs)
+print(TMA2_ROIs)
+
+```
+
+```{r verify_content}
+
+head(coord(TMA1_ROIs))
+head(coord(TMA2_ROIs))
+
+```
+
+
+```{r Check_pixel_data}
+head(pixelData(TMA1_ROIs))
+head(pixelData(TMA2_ROIs))
+```
+
+
+```{r extract_intensity_for_data_further_analysis}
+
+   intensities_TMA1 <- spectra(TMA1_ROIs)
+   intensities_TMA2 <- spectra(TMA2_ROIs)
+```
+
+
+```{r visualize_mean_spectrum}
+
+plot(TMA1_ROIs)
+
+plot(TMA2_ROIs)
+```
+
+
+
+Then we attach the metadata to the raw data.
+
+```{r attach-metadata}
+
+# order spectra coordinates to have them in same order in MSI data and metadata
+TMA1_annot_ordered <- TMA1_tumor_stroma[with(TMA1_tumor_stroma, order(y,x)), ]
+TMA2_annot_ordered <- TMA2_tumor_stroma[with(TMA2_tumor_stroma, order(y,x)), ]
+
+
+# check if coordinates order is the same
+head(TMA1_annot_ordered)
+head(pixelData(TMA1_ROIs))
+
+```
+
+
+```{r}
+# combine the additional metadata and the pixel data (pData) of the MSI data
+TMA1_metadata <- cbind(as.data.frame(pixelData(TMA1_ROIs)), TMA1_annot_ordered[4:7])
+TMA2_metadata <- cbind(as.data.frame(pixelData(TMA2_ROIs)), TMA2_annot_ordered[4:7])
+
+# attach the metadata dataframe to the MSI data, this requires defining the coordinates and run in the PositionDataFrame, which is a special data frame that holds metadata directly attached to the MSI data
+
+# Create PositionDataFrame for TMA1
+pd <- PositionDataFrame(
+     coord = TMA1_metadata[, c("x", "y")],
+     run = TMA1_metadata$run,
+     histology = TMA1_metadata$histology,
+     diagnosis = TMA1_metadata$diagnosis,
+     invasiveness = TMA1_metadata$invasiveness,
+     patient = TMA1_metadata$patient
+ )
+ 
+# Check the structure of pd
+ str(pd)
+ 
+# Create PositionDataFrame for TMA2
+pd2 <- PositionDataFrame(
+     coord = TMA2_metadata[, c("x", "y")],
+     run = TMA2_metadata$run,
+     histology = TMA2_metadata$histology,
+     diagnosis = TMA2_metadata$diagnosis,
+     invasiveness = TMA2_metadata$invasiveness,
+     patient = TMA2_metadata$patient
+ )
+# Check the structure of pd
+ str(pd2)
+
+```
+
+
+```{r visualize_mean_spectrum}
+
+pixelData(TMA1_ROIs)$patient <- TMA1_metadata$patient
+pixelData(TMA2_ROIs)$patient <- TMA2_metadata$patient
+
+
+# TMA1_metadata has the same order as pixelData(TMA1_ROIs)
+pixelData(TMA1_ROIs)$histology <- TMA1_metadata$histology
+pixelData(TMA2_ROIs)$histology <- TMA2_metadata$histology
+
+# Verify that it's been added
+head(pixelData(TMA1_ROIs)$histology)
+head(pixelData(TMA2_ROIs)$histology)
+```
+
+
+
+To get an overview of the annotations, we visualize the spectra annotations of each file. 
+```{r}
+patients_plot = ggplot(as.data.frame(pixelData(TMA1_ROIs)), aes(x=x, y=y, fill=patient)) +
+  geom_tile(height = 1, width=1, show.legend=FALSE) +
+  coord_fixed() +
+  ggtitle("Different patients") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(text=element_text(family="ArialMT", face="bold", size=12)) +
+  scale_discrete_manual(aesthetics = c("colour", "fill"), 
+                        values = colorRampPalette(c("hotpink", "plum", "plum4", "violet", "magenta", "magenta4", "mediumorchid3", "mediumorchid4", "purple", "purple4"))(19))
+
+print(patients_plot)
+
+# calculate mean x and mean y position for each patient tissue
+coord_labels = aggregate(cbind(x,y) ~ patient, data=as.data.frame(pixelData(TMA1_ROIs)), mean, na.rm=TRUE, na.action="na.pass") 
+
+
+# histology
+# Color palette
+col <- colorRampPalette(c("hotpink", "plum", "plum4", "violet", "magenta", "magenta4", "mediumorchid3", "mediumorchid4", "purple", "purple4"))(39)
+
+# Create plot data
+plot_data <- data.frame(
+  x = pixelData(TMA1_ROIs)$x,
+  y = pixelData(TMA1_ROIs)$y,
+  histology = pixelData(TMA1_ROIs)$histology,
+  run = pixelData(TMA1_ROIs)$run
+)
+
+
+# Histology plot
+histology_plot <- ggplot(plot_data, aes(x = x, y = y, fill = histology)) +
+  geom_tile() +
+  scale_fill_manual(values = col[c(1, 20)]) +
+  coord_fixed() +
+  theme_minimal() +
+  labs(title = "Tumor and stroma spectra")
+
+print(histology_plot)
+
+# Run plot
+run_plot <- ggplot(plot_data, aes(x = x, y = y, fill = run)) +
+  geom_tile() +
+  scale_fill_manual(values = c("grey48", "grey30")) +
+  coord_fixed() +
+  theme_minimal() +
+  labs(title = "TMA (Run)")
+
+print(run_plot)
+```
+
+
+
+
+
+```{r Patient2_histology_run}
+
+
+patients_plot2 = ggplot(as.data.frame(pData(TMA2_ROIs)), aes(x=x, y=y, fill=patient)) +
+  geom_tile(height = 1, width=1) +
+  coord_fixed() +
+  ggtitle("Different patients") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(family="ArialMT", face="bold", size=12),
+        legend.position = "none") +
+  scale_fill_manual(values = colorRampPalette(c("hotpink", "plum", "plum4", "violet", "magenta", "magenta4", "mediumorchid3", "mediumorchid4", "purple", "purple4"))(20))
+
+# Add text labels
+coord_labels2 = aggregate(cbind(x,y) ~ patient, data=as.data.frame(pData(TMA2_ROIs)), mean, na.rm=TRUE)
+
+patients_plot2 + 
+  geom_text(data = coord_labels2, aes(x = x, y = y, label = patient), color = "white", size = 3)
+
+print(patients_plot2)
+
+
+# Histology plot
+histology_plot <- image(TMA2_ROIs, 
+                        formula = ~ histology, 
+                        normalize.image = "none",
+                        contrast.enhance = "none",
+                        smooth.image = "none",
+                        col = c("royalblue", "coral2"),
+                        main = "Tumor and stroma spectra")
+
+# Run plot
+run_plot <- image(TMA2_ROIs, 
+                  formula = ~ run, 
+                  normalize.image = "none",
+                  contrast.enhance = "none",
+                  smooth.image = "none",
+                  col = c("grey48", "grey30"),
+                  main = "TMA (Run)")
+
+# Display the plots
+print(histology_plot)
+print(run_plot)
+                       
+```
+
+
+# Pre-processing
+
+For classification, we need to split the data into a training and test data set. 
+It is important that the same subjects (patients) are either present in the training or in the test group but not in both. 
+For this dataset it means that tumor and stroma region of the same patient have to be in the same set. Ideally, the training and test dataset are independent. 
+Even though the tissues in TMA1 and TMA2 were similarly handled and are from a single institute, they were at least measured in separated runs. 
+Thus, we will use TMA1 and TMA2 as test and training set respectively in the classification. 
+To borrow as little information as possible between the two datasets, we keep them separate during preprocessing and only transfer the m/z positions from TMA2 to TMA1. 
+
+![Overview of the analysis worklow](SSC_WF_case_study3.png)
+
+## Spectral processing and mass alignment
+
+Pre-processing is performed in several steps in order to be able to visualize the intermediate results. 
+First we perform spectra smoothing and baseline reduction, which is recommended for low mass resolution MALDI-TOF imaging data.
+
+```{r pp-smoothing-baseline}
+# For TMA1
+library(Cardinal)
+
+# Smoothing with adjusted parameters
+TMA1_smoothed_blremoved <- smooth(TMA1_ROIs, method = "gaussian", sd = 2)
+
+# Get the coordinates of the first spectrum
+first_coord_TMA1 <- coord(TMA1_ROIs)[1, ]
+
+# Plot before preprocessing
+plot(TMA1_ROIs, coord=c(first_coord_TMA1$x, first_coord_TMA1$y))
+
+# Plot after smoothing
+plot(TMA1_smoothed_blremoved, coord=c(first_coord_TMA1$x, first_coord_TMA1$y))
+
+# For TMA2
+TMA2_smoothed_blremoved <- smooth(TMA2_ROIs, method = "gaussian", sd = 2)
+
+# Get the coordinates of the first spectrum
+first_coord_TMA2 <- coord(TMA2_ROIs)[1, ]
+
+# Plot before preprocessing
+plot(TMA2_ROIs, coord=c(first_coord_TMA2$x, first_coord_TMA2$y))
+
+# Plot after smoothing
+plot(TMA2_smoothed_blremoved, coord=c(first_coord_TMA2$x, first_coord_TMA2$y))
+```
+
+Next, we perform m/z alignment in order to remove m/z shifts between spectra. 
+
+```{r pp-alignment}
+# For TMA1
+TMA1_smoothed <- smooth(TMA1, method="gaussian", width=3)
+TMA1_processed <- process(TMA1_smoothed)
+
+# For TMA2
+TMA2_smoothed <- smooth(TMA2, method="gaussian", width=3)
+TMA2_processed <- process(TMA2_smoothed)
+
+
+#After processing, let's try to visualize the results:
+
+# For TMA1
+plot(TMA1_processed, mz=1000.5, tolerance=0.1, main="TMA1 Processed")
+
+# For TMA2
+plot(TMA2_processed, mz=1000.5, tolerance=0.1, main="TMA2 Processed")
+
+```
+
+
+
+
+
+
+
+

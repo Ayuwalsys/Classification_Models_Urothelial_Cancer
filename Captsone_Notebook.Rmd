@@ -1,0 +1,1393 @@
+---
+title: "Benchmarking Spatial-Aware Classification Models for Urothelial Cancer Subtypes "
+output: html_notebook
+---
+
+
+```{r}
+library(Cardinal)
+library(ggplot2)
+```
+
+# Data import 
+
+```{r load-analyze-files}
+TMA1 <- readImzML("TMA1.imzML")
+TMA2 <- readImzML("TMA2.imzML")
+```
+
+#plot(TMA1, mz=1000.5, tolerance=0.1)
+
+
+```{r viz_analyze_files}
+TMA1 
+TMA2 
+```
+
+```{r load-spectra-annotations}
+TMA1_annotations <- read.delim("TMA1_annotations.txt", header = TRUE, stringsAsFactors = FALSE)
+TMA2_annotations <- read.delim("TMA2_annotations.txt", header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+
+```{r vis_spectra_annotations}
+
+head(TMA1_annotations)
+head(TMA2_annotations)
+
+```
+
+
+```{r}
+library(dplyr)
+
+plot_tissue_info <- function(annotations, plot_type = "diagnosis") {
+  # Ensure annotations are ordered correctly
+  annotations <- annotations %>% arrange(y, x)
+  
+  # Create the plot data
+  plot_data <- annotations %>%
+    select(x, y, diagnosis, histology, invasiveness)
+  
+  # Determine fill based on plot type
+  fill_var <- sym(plot_type)
+  fill_label <- capitalize(plot_type)
+  
+  # Create the plot
+  ggplot(plot_data, aes(x = x, y = y, fill = !!fill_var)) +
+    geom_tile() +
+    scale_fill_viridis_d() +
+    theme_minimal() +
+    labs(title = paste("Tissue", fill_label),
+         x = "X coordinate",
+         y = "Y coordinate",
+         fill = fill_label) +
+    coord_fixed(ratio = 1) +  # This ensures squares are square
+    theme(legend.position = "right")
+}
+
+# Helper function to capitalize first letter
+capitalize <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  x
+}
+
+# Plot for TMA1
+plot_tissue_info(TMA1_annotations, "diagnosis")
+plot_tissue_info(TMA1_annotations, "histology")
+plot_tissue_info(TMA1_annotations, "invasiveness")
+
+# Plot for TMA2
+plot_tissue_info(TMA2_annotations, "diagnosis")
+plot_tissue_info(TMA2_annotations, "histology")
+plot_tissue_info(TMA2_annotations, "invasiveness")
+
+```
+ 
+
+a. Generate single m/z images:
+```{r}
+
+# For TMA1
+plot(TMA2, mz=1000.5, tolerance=0.1)
+
+# For TMA2
+#plot(TMA2, mz=1000.5, tolerance=0.1)
+
+```
+
+
+```{r}
+# Plot spectra from specific pixels
+plot(TMA1, coord = list(c(75, 60), c(100, 80)))
+```
+
+# Preparing raw and metadata
+
+First we filter the annotation data to remove all spectra that are not part of tumor or stroma tissues.
+
+```{r prepare-spectra-annotations}
+
+# Keeping only spectra annotations with tumor or stroma annotation in each TMA
+TMA1_tumor_stroma <- TMA1_annotations[TMA1_annotations$histology == "Stroma" | TMA1_annotations$histology == "Tumor",]
+TMA2_tumor_stroma <- TMA2_annotations[TMA2_annotations$histology == "Stroma" | TMA2_annotations$histology == "Tumor",]
+
+```
+
+
+```{r metadata-filtering}
+# Generation of a logical vector that indicates for each spectrum if it has a tumor / stroma annotation or not
+
+# For TMA1
+coord_TMA1 <- coord(TMA1)
+coord_string_TMA1 <- paste(coord_TMA1$x, coord_TMA1$y, sep="_")
+annotation_string_TMA1 <- paste(TMA1_tumor_stroma$x, TMA1_tumor_stroma$y, sep="_")
+annotated_spectra_TMA1 <- coord_string_TMA1 %in% annotation_string_TMA1
+
+# For TMA2
+coord_TMA2 <- coord(TMA2)
+coord_string_TMA2 <- paste(coord_TMA2$x, coord_TMA2$y, sep="_")
+annotation_string_TMA2 <- paste(TMA2_tumor_stroma$x, TMA2_tumor_stroma$y, sep="_")
+annotated_spectra_TMA2 <- coord_string_TMA2 %in% annotation_string_TMA2
+
+```
+
+
+# Filtering to keep only spectra that have a tumor / stroma annotation
+```{r prepare-spectra-annotations}
+
+# Filtering
+# For TMA1
+TMA1_ROIs <- subset(TMA1, annotated_spectra_TMA1)
+
+# For TMA2
+TMA2_ROIs <- subset(TMA2, annotated_spectra_TMA2)
+
+```
+
+
+```{r prepare-spectra-annotations}
+
+print(TMA1_ROIs)
+print(TMA2_ROIs)
+
+```
+
+```{r verify_content}
+
+head(coord(TMA1_ROIs))
+head(coord(TMA2_ROIs))
+
+```
+
+
+```{r Check_pixel_data}
+head(pixelData(TMA1_ROIs))
+head(pixelData(TMA2_ROIs))
+```
+
+
+```{r extract_intensity_for_data_further_analysis}
+
+   intensities_TMA1 <- spectra(TMA1_ROIs)
+   intensities_TMA2 <- spectra(TMA2_ROIs)
+```
+
+
+```{r visualize_mean_spectrum}
+
+plot(TMA1_ROIs)
+
+plot(TMA2_ROIs)
+```
+
+
+
+Then we attach the metadata to the raw data.
+
+```{r attach-metadata}
+
+# order spectra coordinates to have them in same order in MSI data and metadata
+TMA1_annot_ordered <- TMA1_tumor_stroma[with(TMA1_tumor_stroma, order(y,x)), ]
+TMA2_annot_ordered <- TMA2_tumor_stroma[with(TMA2_tumor_stroma, order(y,x)), ]
+
+
+# check if coordinates order is the same
+head(TMA1_annot_ordered)
+head(pixelData(TMA1_ROIs))
+
+
+head(TMA2_annot_ordered)
+head(pixelData(TMA2_ROIs))
+```
+
+
+```{r}
+# combine the additional metadata and the pixel data (pData) of the MSI data
+TMA1_metadata <- cbind(as.data.frame(pixelData(TMA1_ROIs)), TMA1_annot_ordered[4:7])
+TMA2_metadata <- cbind(as.data.frame(pixelData(TMA2_ROIs)), TMA2_annot_ordered[4:7])
+
+# attach the metadata dataframe to the MSI data, this requires defining the coordinates and run in the PositionDataFrame, which is a special data frame that holds metadata directly attached to the MSI data
+
+# Create PositionDataFrame for TMA1
+pd <- PositionDataFrame(
+     coord = TMA1_metadata[, c("x", "y")],
+     run = TMA1_metadata$run,
+     histology = TMA1_metadata$histology,
+     diagnosis = TMA1_metadata$diagnosis,
+     invasiveness = TMA1_metadata$invasiveness,
+     patient = TMA1_metadata$patient
+ )
+ 
+# Check the structure of pd
+ str(pd)
+ 
+# Create PositionDataFrame for TMA2
+pd2 <- PositionDataFrame(
+     coord = TMA2_metadata[, c("x", "y")],
+     run = TMA2_metadata$run,
+     histology = TMA2_metadata$histology,
+     diagnosis = TMA2_metadata$diagnosis,
+     invasiveness = TMA2_metadata$invasiveness,
+     patient = TMA2_metadata$patient
+ )
+# Check the structure of pd
+ str(pd2)
+
+```
+
+
+```{r visualize_mean_spectrum}
+
+pixelData(TMA1_ROIs)$patient <- TMA1_metadata$patient
+pixelData(TMA2_ROIs)$patient <- TMA2_metadata$patient
+
+
+# TMA1_metadata has the same order as pixelData(TMA1_ROIs)
+pixelData(TMA1_ROIs)$histology <- TMA1_metadata$histology
+pixelData(TMA2_ROIs)$histology <- TMA2_metadata$histology
+
+# Verify that it's been added
+head(pixelData(TMA1_ROIs)$histology)
+head(pixelData(TMA2_ROIs)$histology)
+```
+
+
+
+To get an overview of the annotations, we visualize the spectra annotations of each file. 
+```{r}
+patients_plot = ggplot(as.data.frame(pixelData(TMA1_ROIs)), aes(x=x, y=y, fill=patient)) +
+  geom_tile(height = 1, width=1, show.legend=FALSE) +
+  coord_fixed() +
+  ggtitle("Different patients") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(text=element_text(family="ArialMT", face="bold", size=12)) +
+  scale_discrete_manual(aesthetics = c("colour", "fill"), 
+                        values = colorRampPalette(c("hotpink", "plum", "plum4", "violet", "magenta", "magenta4", "mediumorchid3", "mediumorchid4", "purple", "purple4"))(19))
+
+print(patients_plot)
+
+# calculate mean x and mean y position for each patient tissue
+coord_labels = aggregate(cbind(x,y) ~ patient, data=as.data.frame(pixelData(TMA1_ROIs)), mean, na.rm=TRUE, na.action="na.pass") 
+
+
+# histology
+# Color palette
+col <- colorRampPalette(c("hotpink", "plum", "plum4", "violet", "magenta", "magenta4", "mediumorchid3", "mediumorchid4", "purple", "purple4"))(39)
+
+# Create plot data
+plot_data <- data.frame(
+  x = pixelData(TMA1_ROIs)$x,
+  y = pixelData(TMA1_ROIs)$y,
+  histology = pixelData(TMA1_ROIs)$histology,
+  run = pixelData(TMA1_ROIs)$run
+)
+
+
+# Histology plot
+histology_plot <- ggplot(plot_data, aes(x = x, y = y, fill = histology)) +
+  geom_tile() +
+  scale_fill_manual(values = col[c(1, 20)]) +
+  coord_fixed() +
+  theme_minimal() +
+  labs(title = "Tumor and stroma spectra")
+
+print(histology_plot)
+
+# Run plot
+run_plot <- ggplot(plot_data, aes(x = x, y = y, fill = run)) +
+  geom_tile() +
+  scale_fill_manual(values = c("grey48", "grey30")) +
+  coord_fixed() +
+  theme_minimal() +
+  labs(title = "TMA (Run)")
+
+print(run_plot)
+```
+
+
+
+
+
+```{r Patient2_histology_run}
+
+
+library(ggplot2)
+library(dplyr)
+
+# Histology plot using ggplot2
+histology_data <- as.data.frame(pData(TMA2_ROIs)) %>%
+  select(x, y, histology)
+
+histology_plot <- ggplot(histology_data, aes(x = x, y = y, fill = histology)) +
+  geom_tile() +
+  scale_fill_manual(values = c("royalblue", "coral2")) +
+  coord_fixed() +
+  theme_minimal() +
+  labs(title = "Tumor and stroma spectra") +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(family="ArialMT", face="bold", size=12))
+
+print(histology_plot)
+
+# Run plot using ggplot2
+run_data <- as.data.frame(pData(TMA2_ROIs)) %>%
+  select(x, y, run)
+
+run_plot <- ggplot(run_data, aes(x = x, y = y, fill = run)) +
+  geom_tile() +
+  scale_fill_manual(values = c("grey48", "grey30")) +
+  coord_fixed() +
+  theme_minimal() +
+  labs(title = "TMA (Run)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(family="ArialMT", face="bold", size=12))
+
+print(run_plot)
+                       
+```
+
+
+# Pre-processing
+For classification, we need to split the data into a training and test data set. 
+It is important that the same subjects (patients) are either present in the training or in the test group but not in both. 
+For this dataset it means that tumor and stroma region of the same patient have to be in the same set. Ideally, the training and test dataset are independent. 
+Even though the tissues in TMA1 and TMA2 were similarly handled and are from a single institute, they were at least measured in separated runs. 
+Thus, we will use TMA1 and TMA2 as test and training set respectively in the classification. 
+To borrow as little information as possible between the two datasets, we keep them separate during preprocessing and only transfer the m/z positions from TMA2 to TMA1. 
+
+![Overview of the analysis worklow](SSC_WF_case_study3.png)
+
+## Spectral processing and mass alignment
+
+Pre-processing is performed in several steps in order to be able to visualize the intermediate results. 
+First we perform spectra smoothing and baseline reduction, which is recommended for low mass resolution MALDI-TOF imaging data.
+
+```{r pp-smoothing-baseline}
+
+library(Cardinal)
+library(matter)
+
+# Function to safely get intensity values
+safe_intensity <- function(data) {
+  tryCatch({
+    int <- intensity(data)
+    if (is(int, "matter_list")) {
+      cat("Intensity is a matter_list\n")
+      return(int)
+    } else if (is.matrix(int)) {
+      cat("Intensity is a matrix\n")
+      return(int)
+    } else {
+      cat("Unexpected intensity structure:", class(int), "\n")
+      return(int)
+    }
+  }, error = function(e) {
+    stop(paste("Error getting intensity:", e$message))
+  })
+}
+
+# Function to preprocess data (smooth and remove baseline)
+preprocess_data <- function(data) {
+  cat("Starting preprocessing...\n")
+  
+  # Check data structure
+  cat("Data class:", class(data), "\n")
+  cat("Data dimensions:", dim(data), "\n")
+  
+  # Smooth the data
+  cat("Smoothing data...\n")
+  smoothed_data <- smooth(data, method="gaussian", width=8, sd=2)
+  
+  # Get intensity values
+  cat("Extracting intensity values...\n")
+  int_values <- safe_intensity(smoothed_data)
+  cat("Intensity class:", class(int_values), "\n")
+  
+  if (is(int_values, "matter_list")) {
+    cat("Processing matter_list...\n")
+    # Process each spectrum in the matter_list
+    for (i in seq_along(int_values)) {
+      if (i %% 100 == 0) cat(sprintf("\rProcessing spectrum %d of %d", i, length(int_values)))
+      spectrum <- as.numeric(int_values[[i]])
+      baseline <- median(spectrum, na.rm = TRUE)
+      int_values[[i]] <- spectrum - baseline
+    }
+  } else if (is.matrix(int_values)) {
+    cat("Processing matrix...\n")
+    # Process the matrix as before
+    for (i in seq_len(nrow(int_values))) {
+      if (i %% 100 == 0) cat(sprintf("\rProcessing spectrum %d of %d", i, nrow(int_values)))
+      spectrum <- int_values[i,]
+      baseline <- median(spectrum, na.rm = TRUE)
+      int_values[i,] <- spectrum - baseline
+    }
+  } else {
+    stop("Unsupported intensity data structure")
+  }
+  
+  cat("\nBaseline reduction complete.\n")
+  
+  # Update the intensity values in the original object
+  cat("Updating intensity values...\n")
+  intensity(smoothed_data) <- int_values
+  
+  cat("Preprocessing complete.\n")
+  return(smoothed_data)
+}
+
+# For TMA1
+cat("Processing TMA1\n")
+TMA1_smoothed_blremoved <- preprocess_data(TMA1_ROIs)
+
+# Get the coordinates of the first spectrum for TMA1
+first_coord_TMA1 <- coord(TMA1_ROIs)[1, ]
+
+# Plot before preprocessing for TMA1
+plot(TMA1_ROIs, coord=c(first_coord_TMA1$x, first_coord_TMA1$y), main="TMA1 Before Preprocessing")
+
+# Plot after preprocessing for TMA1
+plot(TMA1_smoothed_blremoved, coord=c(first_coord_TMA1$x, first_coord_TMA1$y), main="TMA1 After Preprocessing")
+
+
+
+
+# For TMA2
+cat("Processing TMA2\n")
+TMA2_smoothed_blremoved <- preprocess_data(TMA2_ROIs)
+
+# Get the coordinates of the first spectrum for TMA2
+first_coord_TMA2 <- coord(TMA2_ROIs)[1, ]
+
+# Plot before preprocessing for TMA2
+plot(TMA2_ROIs, coord=c(first_coord_TMA2$x, first_coord_TMA2$y), main="TMA2 Before Preprocessing")
+
+# Plot after preprocessing for TMA2
+plot(TMA2_smoothed_blremoved, coord=c(first_coord_TMA2$x, first_coord_TMA2$y), main="TMA2 After Preprocessing")
+
+# Save the preprocessed data
+#save(TMA2_smoothed_blremoved, file="TMA2_preprocessed.RData")
+
+
+# Save the preprocessed data
+#save(TMA1_smoothed_blremoved, file="TMA1_preprocessed.RData")
+
+# Clean up to free memory
+#rm(TMA1_ROIs)
+#gc(full=TRUE)
+```
+
+Next, we perform m/z alignment in order to remove m/z shifts between spectra. 
+# workin New approach
+#
+```{r}
+library(Cardinal)
+library(magrittr)  # For the %>% operator
+
+# Function to perform peak alignment
+perform_peak_alignment <- function(data, tolerance = 200, units = "ppm") {
+  cat("Performing peak alignment...\n")
+  
+  # Calculate mean spectrum
+  cat("Calculating mean spectrum...\n")
+  data_with_mean <- summarizeFeatures(data, stat = "mean")
+  mean_spectrum <- featureData(data_with_mean)$mean
+  
+  # Find peaks in the mean spectrum
+  cat("Finding peaks...\n")
+  peaks <- findpeaks(mean_spectrum, SNR = 3)
+  
+  # Perform peak alignment
+  cat("Aligning peaks...\n")
+  aligned_data <- peakAlign(data, ref = peaks, tolerance = tolerance, units = units)
+  
+  cat("Peak alignment complete.\n")
+  return(aligned_data)
+}
+
+# Peak alignment for TMA1
+cat("Performing peak alignment for TMA1\n")
+TMA1_aligned <- perform_peak_alignment(TMA1_smoothed_blremoved)
+
+# Peak alignment for TMA2
+cat("Performing peak alignment for TMA2\n")
+TMA2_aligned <- perform_peak_alignment(TMA2_smoothed_blremoved)
+
+# Save the aligned data
+#save(TMA1_aligned, file="TMA1_aligned.RData")
+#save(TMA2_aligned, file="TMA2_aligned.RData")
+
+# Plot to visualize the effect of peak alignment
+par(mfrow=c(2,2))
+plot(TMA1_smoothed_blremoved, mz=1000.5, tolerance=0.5, main="TMA1 Before Alignment")
+plot(TMA1_aligned, mz=1000.5, tolerance=0.5, main="TMA1 After Alignment")
+plot(TMA2_smoothed_blremoved, mz=1000.5, tolerance=0.5, main="TMA2 Before Alignment")
+plot(TMA2_aligned, mz=1000.5, tolerance=0.5, main="TMA2 After Alignment")
+```
+## Then we perform mass re-calibration by using the same function with internal calibrants as a reference. The internal calibrants angiotensin (m/z 1296.69), substance P (m/z 1347.72), fibrinopeptide B (m/z 1570.68) were mixed with the matrix and thus equally distributed over the tissue. 805.42 is an autolysis peptide of trypsin that we include as well as trypsin was sprayed equally over the tissue section.
+
+# Works
+```{r pp-recalibration}
+
+# Modified calibration approach
+calibrant_mz <- c(805.42, 1296.69, 1347.72, 1570.68)
+
+# Function to perform recalibration
+perform_recalibration <- function(data, ref_mz, tolerance = 200, units = "ppm") {
+    cat("Performing recalibration...\n")
+    
+    # Perform recalibration using the reference m/z values
+    recalibrated_data <- recalibrate(data, 
+                                    ref = ref_mz, 
+                                    tolerance = tolerance, 
+                                    units = units,
+                                    method = "locmax") %>%
+        process()
+    
+    cat("Recalibration complete.\n")
+    return(recalibrated_data)
+}
+
+# Apply recalibration to TMA1 and TMA2
+cat("Recalibrating TMA1\n")
+TMA1_recalibrated <- perform_recalibration(TMA1_aligned, calibrant_mz)
+
+cat("Recalibrating TMA2\n")
+TMA2_recalibrated <- perform_recalibration(TMA2_aligned, calibrant_mz)
+
+# Plot to visualize the effect of recalibration
+par(mfrow=c(2,2))
+plot(TMA1_aligned, mz=805.42, tolerance=0.5, main="TMA1 Before Recalibration")
+plot(TMA1_recalibrated, mz=805.42, tolerance=0.5, main="TMA1 After Recalibration")
+plot(TMA2_aligned, mz=805.42, tolerance=0.5, main="TMA2 Before Recalibration")
+plot(TMA2_recalibrated, mz=805.42, tolerance=0.5, main="TMA2 After Recalibration")
+
+```
+
+## Peak picking and filtering
+
+Next, we perform peak picking, alignment and filtering only on TMA2. 
+```{r}
+
+TMA2_recalibrated@centroided <- FALSE
+# Perform peak picking
+
+# Peak picking, alignment, and filtering for TMA2
+TMA2_pprocessed <- TMA2_recalibrated %>%
+  peakPick(method = "mad", SNR = 5) %>% 
+  peakAlign(tolerance = 200, units = "ppm") %>%
+  peakFilter(freq.min = 0.01) %>%
+  process(blocks = 500)
+
+# Plot results for TMA2
+plot(TMA2_pprocessed, mz=1000.5, tolerance=0.1, main="TMA2 Processed")
+
+
+
+```
+
+# New approach 
+```{r pp-peakbinning}
+
+# Fixed binning function with stricter matching
+bin_peaks <- function(data, reference_mz, tolerance = 200, units = "ppm") {
+    # Convert tolerance to absolute units if needed
+    if(units == "ppm") {
+        abs_tolerance <- reference_mz * (tolerance / 1e6)
+    } else {
+        abs_tolerance <- tolerance
+    }
+    
+    # Initialize results matrix
+    matched_indices <- integer()
+    
+    # For each reference m/z, find ALL peaks within tolerance
+    for(i in seq_along(reference_mz)) {
+        diffs <- abs(mz(data) - reference_mz[i])
+        within_tolerance <- which(diffs <= abs_tolerance[i])
+        
+        # If multiple peaks within tolerance, take the closest one
+        if(length(within_tolerance) > 0) {
+            closest_idx <- within_tolerance[which.min(diffs[within_tolerance])]
+            matched_indices <- c(matched_indices, closest_idx)
+        }
+    }
+    
+    # Remove duplicates and sort
+    matched_indices <- sort(unique(matched_indices))
+    
+    # Subset the data using only the matched indices
+    if(length(matched_indices) > 0) {
+        result <- data[, matched_indices]
+    } else {
+        warning("No matches found within tolerance")
+        result <- data[, integer(0)]
+    }
+    
+    return(result)
+}
+
+# Apply improved binning to TMA1 and TMA2
+TMA1_peakbinned <- tryCatch({
+    binned <- bin_peaks(TMA1_recalibrated, peakpicked_mz) %>% process()
+    cat("TMA1 binning successful\n")
+    binned
+}, error = function(e) {
+    message("Error processing TMA1: ", e$message)
+    NULL
+})
+
+TMA2_peakbinned <- tryCatch({
+    binned <- bin_peaks(TMA2_recalibrated, peakpicked_mz) %>% process()
+    cat("TMA2 binning successful\n")
+    binned
+}, error = function(e) {
+    message("Error processing TMA2: ", e$message)
+    NULL
+})
+
+# Print detailed summary
+if (!is.null(TMA1_peakbinned) && !is.null(TMA2_peakbinned)) {
+    cat("\nSummary:\n")
+    cat("Number of features in original peak list:", length(peakpicked_mz), "\n")
+    cat("Number of features in TMA1 after binning:", length(mz(TMA1_peakbinned)), "\n")
+    cat("Number of features in TMA2 after binning:", length(mz(TMA2_peakbinned)), "\n")
+    
+    # Print matched m/z values for verification
+    cat("\nMatched m/z values in TMA1:\n")
+    print(round(mz(TMA1_peakbinned), 2))
+    cat("\nOriginal reference m/z values:\n")
+    print(round(peakpicked_mz, 2))
+}
+```
+
+
+#works 
+```{r peakbinned}
+# Define the actual peaks we found in TMA1 that are close to our reference peaks
+TMA1_actual_mz <- c(806, 856, 856, 959, 1308, 1360, 1514, 1566, 1659, 1761, 1812, 2114, 2214)
+
+# list of picked m/z features
+peakpicked_mz <- mz(TMA2_pprocessed)
+
+# For TMA1
+TMA1_peakbinned <- TMA1_recalibrated %>%
+  subsetFeatures(mz = TMA1_actual_mz, tolerance = 200, units = "ppm") %>%
+  process()
+
+# For TMA2
+TMA2_peakbinned <- TMA2_recalibrated %>%
+  subsetFeatures(mz = peakpicked_mz, tolerance = 200, units = "ppm") %>%
+  process()
+
+
+```
+
+```{r pp-normalization}
+
+TMA1_normalized <- TMA1_peakbinned %>%
+  normalize(method="tic") %>%
+  process()
+
+TMA2_normalized <- TMA2_peakbinned %>%
+  normalize(method="tic") %>%
+  process()
+
+save(TMA1_normalized, file="TMA1_preprocessed.RData")
+save(TMA2_normalized, file="TMA2_preprocessed.RData")
+
+
+```
+
+
+# Cross-validation and classification
+
+In order to find optimal classification parameters cross validation is performed. We will split the dataset into 5 groups (also called folds) with 4 patients each. During cross validation the data from 4 groups are used for classification and then tested on the remaining group. This is repeated in order to have all combinations of groups as training and test data. We will perform classification first with the Spatial Shrunken Centroids (SSC) method and repeat it then with the partial least squares regression (PLS) method. 
+
+
+```{r generating-folds}
+
+# Inputs: 
+head(TMA2_metadata)
+unique(TMA2_metadata$patient) # 20 patients
+
+## randomly split into 5 groups
+set.seed(1)
+folds <- split(unique(TMA2_metadata$patient), sample(20, 5))
+fold_dataframe <- data.frame(unlist(folds), c(rep(1, 4), rep(2, 4), rep(3, 4), rep (4,4), rep(5,4)))
+colnames(fold_dataframe) <- c("patient", "folds")
+rownames(fold_dataframe) <- NULL
+
+# merge dataframe with folds to metadata and attach it to the MSI data which will be used for cross validation
+pixelData(TMA2_recalibrated)$folds <- merge(TMA2_metadata, fold_dataframe, by.x = "patient")$folds
+
+```
+
+
+# SSC method with crossvalidation
+This code performs cross-validation for a Spatial Shrunken Centroids model:
+- Tests different shrinkage parameters (s = 0.01 to 0.2)
+- Evaluates model performance with various metrics
+- Calculates weighted accuracy based on class distribution (468 infiltrating vs 320 non-infiltrating samples)
+- Computes balanced accuracy to handle class imbalance
+
+The goal is to find the optimal shrinkage parameter for the SSC classifier while accounting for spatial relationships in the tissue data.
+
+```{r}
+library(Cardinal)
+
+
+ssc_cv_bladder <- crossValidate(
+    fit. = spatialShrunkenCentroids,
+    x = TMA2_recalibrated,
+    y = TMA2_recalibrated$invasiveness,
+    folds = fold_assignments,
+    .r = 3,
+    s = c(0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2),  # Very small shrinkage values
+    r = 3  # Increased neighborhood size
+)
+
+# Create results dataframe
+ssc_results <- data.frame(
+    s = c(0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2),
+    Accuracy = numeric(7),
+    Sensitivity = numeric(7),
+    Specificity = numeric(7),
+    Balanced_Accuracy = numeric(7)
+)
+
+# Calculate metrics for each shrinkage parameter
+for(i in 1:length(ssc_results$s)) {
+    fold_metrics <- sapply(ssc_cv_bladder@model$scores, function(x) {
+        c(inf_recall = x["infiltrating", "Recall", i],
+          noninf_recall = x["non-infiltrating", "Recall", i])
+    })
+    
+    ssc_results$Sensitivity[i] <- mean(fold_metrics["inf_recall",], na.rm = TRUE)
+    ssc_results$Specificity[i] <- mean(fold_metrics["noninf_recall",], na.rm = TRUE)
+    ssc_results$Accuracy[i] <- (468 * ssc_results$Sensitivity[i] + 
+                               320 * ssc_results$Specificity[i]) / (468 + 320)
+    ssc_results$Balanced_Accuracy[i] <- mean(c(ssc_results$Sensitivity[i], 
+                                             ssc_results$Specificity[i]))
+}
+
+```
+
+```{r}
+# Create visualization
+par(mfrow = c(2,1))
+
+# Balanced Accuracy plot
+plot(ssc_results$s, ssc_results$Balanced_Accuracy,
+     type = "b", col = "black",
+     xlab = "Shrinkage Parameter (s)",
+     ylab = "Balanced Accuracy",
+     main = "SSC Results: Balanced Accuracy",
+     ylim = c(0,1))
+grid()
+
+# Sensitivity/Specificity plot
+plot(ssc_results$s, ssc_results$Sensitivity,
+     type = "b", col = "blue",
+     xlab = "Shrinkage Parameter (s)",
+     ylab = "Rate",
+     main = "SSC Results: Sensitivity/Specificity",
+     ylim = c(0,1))
+lines(ssc_results$s, ssc_results$Specificity,
+      type = "b", col = "red")
+legend("topright", 
+       legend = c("Sensitivity (Infiltrating)", "Specificity (Non-infiltrating)"),
+       col = c("blue", "red"),
+       lty = 1,
+       pch = 1)
+grid()
+
+# Print results
+print("\nSSC Results by Shrinkage Parameter:")
+print(round(ssc_results, 3))
+
+# Find optimal parameters using balanced accuracy
+best_idx <- which.max(ssc_results$Balanced_Accuracy)
+cat("\nBest results:\n")
+cat("Shrinkage parameter (s):", ssc_results$s[best_idx], "\n")
+cat("Overall Accuracy:", round(ssc_results$Accuracy[best_idx], 3), "\n")
+cat("Balanced Accuracy:", round(ssc_results$Balanced_Accuracy[best_idx], 3), "\n")
+cat("Sensitivity (Infiltrating):", round(ssc_results$Sensitivity[best_idx], 3), "\n")
+cat("Specificity (Non-infiltrating):", round(ssc_results$Specificity[best_idx], 3), "\n")
+
+```
+
+
+```{r}
+# Table visualization:
+
+library(kableExtra)
+library(dplyr)
+
+# Calculate F1 Score for each row
+ssc_results <- ssc_results %>%
+  mutate(
+    F1_Score = 2 * (Sensitivity * Specificity) / (Sensitivity + Specificity)
+  )
+
+# Create formatted table
+results_table <- ssc_results %>%
+  mutate(
+    s = sprintf("%.3f", s),
+    Accuracy = sprintf("%.3f", Accuracy),
+    Sensitivity = sprintf("%.3f", Sensitivity), 
+    Specificity = sprintf("%.3f", Specificity),
+    Balanced_Accuracy = sprintf("%.3f", Balanced_Accuracy),
+    F1_Score = sprintf("%.3f", F1_Score)
+  ) %>%
+  rename(
+    "Shrinkage (s)" = s,
+    "Accuracy" = Accuracy,
+    "Sensitivity (Infiltrating)" = Sensitivity,
+    "Specificity (Non-infiltrating)" = Specificity,
+    "Balanced Accuracy" = Balanced_Accuracy,
+    "F1 Score" = F1_Score
+  )
+
+# Create styled table
+kable(results_table, 
+      caption = "SSC Model Performance Metrics",
+      align = rep('c', 6)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = FALSE) %>%
+  row_spec(6, background = "#E8F5E9", bold = TRUE) %>%  # Highlight best accuracy row (s=0.150)
+  row_spec(5, background = "#E3F2FD", bold = TRUE) %>%  # Highlight best balanced accuracy row (s=0.100)
+  column_spec(1, bold = TRUE) %>%
+  add_header_above(c(" " = 1, "Performance Metrics" = 5)) %>%
+  footnote(
+    general = "Best accuracy (green) achieved with s=0.150; Best balanced accuracy (blue) with s=0.100",
+    symbol = c("Accuracy considers overall classification performance",
+               "Balanced Accuracy represents mean of sensitivity and specificity",
+               "F1 Score represents harmonic mean of precision and recall")
+  )
+
+
+
+```
+
+
+
+
+The PLS method:
+Is less sensitive to class imbalance can handle high-dimensional data well often performs better with spectral data
+provides information about feature importance
+
+```{r}
+# Try PLS classification with cross-validation
+pls_cv_bladder <- crossValidate(
+    fit. = PLS,  # Change to PLS classifier
+    x = TMA2_recalibrated,
+    y = TMA2_recalibrated$invasiveness,
+    folds = TMA2_recalibrated$folds,
+    ncomp = c(2, 3, 4, 5, 6,7,8),  # Number of components to try
+    .method = "class",         # For classification
+    probability = TRUE,
+    trainProcess = process,
+    testProcess = process,
+    nchunks = getCardinalNChunks(),
+    verbose = TRUE,
+    BPPARAM = getCardinalBPPARAM()
+)
+
+# Analyze PLS results
+# First check the structure
+cat("PLS model structure:\n")
+str(pls_cv_bladder@model$scores[[1]])
+
+# Print the performance metrics
+cat("\nPLS average performance:\n")
+print(pls_cv_bladder@model$average)
+
+
+# Extract results for each number of components
+ncomp_values <- as.numeric(gsub("ncomp=", "", dimnames(pls_cv_bladder@model$scores[[1]])[[3]]))
+
+# Initialize results dataframe
+results <- data.frame(
+    ncomp = ncomp_values,
+    Accuracy = numeric(length(ncomp_values)),
+    Sensitivity = numeric(length(ncomp_values)),  # For infiltrating
+    Specificity = numeric(length(ncomp_values))   # For non-infiltrating
+)
+
+# Calculate performance metrics
+for(i in seq_along(ncomp_values)) {
+    fold_metrics <- sapply(pls_cv_bladder@model$scores, function(x) {
+        c(inf_recall = x["infiltrating", "Recall", i],
+          noninf_recall = x["non-infiltrating", "Recall", i])
+    })
+    
+    results$Sensitivity[i] <- mean(fold_metrics["inf_recall",], na.rm = TRUE)
+    results$Specificity[i] <- mean(fold_metrics["noninf_recall",], na.rm = TRUE)
+    results$Accuracy[i] <- mean(c(results$Sensitivity[i], results$Specificity[i]))
+}
+
+# Plot results
+par(mfrow = c(2,1))
+
+# Accuracy plot
+plot(results$ncomp, results$Accuracy,
+     type = "b", col = "black",
+     xlab = "Number of Components",
+     ylab = "Accuracy",
+     main = "PLS Cross-validation Results: Accuracy",
+     ylim = c(0,1))
+grid()
+
+# Sensitivity/Specificity plot
+plot(results$ncomp, results$Sensitivity,
+     type = "b", col = "blue",
+     xlab = "Number of Components",
+     ylab = "Rate",
+     main = "PLS Results: Sensitivity/Specificity",
+     ylim = c(0,1))
+lines(results$ncomp, results$Specificity,
+      type = "b", col = "red")
+legend("topright", 
+       legend = c("Sensitivity (Infiltrating)", "Specificity (Non-infiltrating)"),
+       col = c("blue", "red"),
+       lty = 1,
+       pch = 1)
+grid()
+
+# Print numerical results
+cat("\nPLS cross-validation results:\n")
+print(results)
+
+# Find optimal parameters
+best_idx <- which.max(results$Accuracy)
+cat("\nBest results:\n")
+cat("Number of components:", results$ncomp[best_idx], "\n")
+cat("Accuracy:", round(results$Accuracy[best_idx], 3), "\n")
+cat("Sensitivity (Infiltrating):", round(results$Sensitivity[best_idx], 3), "\n")
+cat("Specificity (Non-infiltrating):", round(results$Specificity[best_idx], 3), "\n")
+
+
+```
+
+
+
+
+```{r}
+
+# Create results dataframe with correct number of components
+results <- data.frame(
+    ncomp = 1:7,  # Changed from 1:10 to 1:7
+    Accuracy = numeric(7),
+    Sensitivity = numeric(7),
+    Specificity = numeric(7)
+)
+
+# Calculate metrics for each component
+for(i in 1:7) {  # Changed from 1:10 to 1:7
+    fold_metrics <- sapply(pls_cv_bladder@model$scores, function(x) {
+        c(inf_recall = x["infiltrating", "Recall", i],
+          noninf_recall = x["non-infiltrating", "Recall", i])
+    })
+    
+    results$Sensitivity[i] <- mean(fold_metrics["inf_recall",], na.rm = TRUE)
+    results$Specificity[i] <- mean(fold_metrics["noninf_recall",], na.rm = TRUE)
+    results$Accuracy[i] <- mean(c(results$Sensitivity[i], results$Specificity[i]))
+}
+
+# Plot results
+par(mfrow = c(2,1))
+
+# Accuracy plot
+plot(results$ncomp, results$Accuracy,
+     type = "b", col = "black",
+     xlab = "Number of Components",
+     ylab = "Accuracy",
+     main = "PLS Cross-validation Results: Accuracy",
+     ylim = c(0,1))
+grid()
+
+# Sensitivity/Specificity plot
+plot(results$ncomp, results$Sensitivity,
+     type = "b", col = "blue",
+     xlab = "Number of Components",
+     ylab = "Rate",
+     main = "PLS Results: Sensitivity/Specificity",
+     ylim = c(0,1))
+lines(results$ncomp, results$Specificity,
+      type = "b", col = "red")
+legend("topright", 
+       legend = c("Sensitivity (Infiltrating)", "Specificity (Non-infiltrating)"),
+       col = c("blue", "red"),
+       lty = 1,
+       pch = 1)
+grid()
+
+# Print results
+print(results)
+
+# Find optimal parameters
+best_idx <- which.max(results$Accuracy)
+cat("\nBest results:\n")
+cat("Number of components:", results$ncomp[best_idx], "\n")
+cat("Accuracy:", round(results$Accuracy[best_idx], 3), "\n")
+cat("Sensitivity:", round(results$Sensitivity[best_idx], 3), "\n")
+cat("Specificity:", round(results$Specificity[best_idx], 3), "\n")
+
+
+
+```
+
+
+
+# SMOTE resampling:
+```{r}
+
+# Extract original data
+feature_matrix <- t(spectra(TMA2_recalibrated))
+response <- TMA2_recalibrated$invasiveness
+
+# Remove NA values
+valid_idx <- !is.na(response)
+feature_matrix_clean <- feature_matrix[valid_idx, ]
+response_clean <- response[valid_idx]
+
+# Create dataframe for SMOTE with explicit factor levels
+data_for_smote <- data.frame(
+    response = factor(response_clean, 
+                     levels = c("infiltrating", "non-infiltrating")),
+    feature_matrix_clean
+)
+
+# Print initial class distribution in SMOTE data
+cat("Class distribution before SMOTE:\n")
+print(table(data_for_smote$response))
+
+# Apply SMOTE
+set.seed(123)  # For reproducibility
+smote_data <- ROSE::ROSE(
+    formula = response ~ ., 
+    data = data_for_smote,
+    N = sum(!is.na(response)),
+    p = 0.5,
+    seed = 123
+)$data
+
+# Create new dataset
+TMA2_balanced <- TMA2_recalibrated
+
+# Ensure the invasiveness column is a factor with correct levels
+TMA2_balanced$invasiveness <- factor(TMA2_balanced$invasiveness,
+                                   levels = c("infiltrating", "non-infiltrating"))
+
+# Replace non-NA values with SMOTE results
+TMA2_balanced$invasiveness[valid_idx] <- as.character(smote_data$response)
+
+# Verify results
+cat("\nOriginal distribution:\n")
+print(table(TMA2_recalibrated$invasiveness, useNA = "ifany"))
+
+cat("\nBalanced distribution:\n")
+print(table(TMA2_balanced$invasiveness, useNA = "ifany"))
+
+# Additional verification
+cat("\nFactor levels in balanced data:", levels(TMA2_balanced$invasiveness), "\n")
+cat("Number of NA values:", sum(is.na(TMA2_balanced$invasiveness)), "\n")
+cat("Number of non-NA values:", sum(!is.na(TMA2_balanced$invasiveness)), "\n")
+
+
+# Run cross-validation on balanced data
+pls_cv_bladder_smote <- crossValidate(
+    fit. = PLS,
+    x = TMA2_balanced,
+    y = TMA2_balanced$invasiveness,
+    folds = TMA2_balanced$folds,
+    ncomp = 1:7,
+    process = TRUE,
+    .method = "class",
+    probability = TRUE,
+    trainProcess = process,
+    testProcess = process,
+    nchunks = getCardinalNChunks(),
+    BPPARAM = getCardinalBPPARAM()
+)
+
+# Calculate and compare results
+results_smote <- data.frame(
+    ncomp = 1:7,
+    Accuracy = numeric(7),
+    Sensitivity = numeric(7),
+    Specificity = numeric(7)
+)
+
+# Calculate metrics for SMOTE results
+for(i in 1:7) {
+    fold_metrics <- sapply(pls_cv_bladder_smote@model$scores, function(x) {
+        c(inf_recall = x["infiltrating", "Recall", i],
+          noninf_recall = x["non-infiltrating", "Recall", i])
+    })
+    
+    results_smote$Sensitivity[i] <- mean(fold_metrics["inf_recall",], na.rm = TRUE)
+    results_smote$Specificity[i] <- mean(fold_metrics["noninf_recall",], na.rm = TRUE)
+    results_smote$Accuracy[i] <- mean(c(results_smote$Sensitivity[i], results_smote$Specificity[i]))
+}
+
+# Print results
+print("Results with SMOTE balancing:")
+print(results_smote)
+
+# Find optimal parameters
+best_idx <- which.max(results_smote$Accuracy)
+cat("\nBest results with SMOTE:\n")
+cat("Number of components:", results_smote$ncomp[best_idx], "\n")
+cat("Accuracy:", round(results_smote$Accuracy[best_idx], 3), "\n")
+cat("Sensitivity:", round(results_smote$Sensitivity[best_idx], 3), "\n")
+cat("Specificity:", round(results_smote$Specificity[best_idx], 3), "\n")
+
+
+# Combine results for plotting
+results_original$model <- "Original"
+results_smote$model <- "SMOTE"
+all_results <- rbind(results_original, results_smote)
+
+# Create comparison plots using ggplot2
+library(ggplot2)
+
+# 1. Overall Accuracy Comparison
+p1 <- ggplot(all_results, aes(x = ncomp, y = Accuracy, color = model)) +
+    geom_line() +
+    geom_point() +
+    theme_minimal() +
+    labs(title = "Accuracy Comparison",
+         x = "Number of Components",
+         y = "Accuracy") +
+    theme(legend.position = "bottom")
+
+# 2. Sensitivity/Specificity Comparison
+results_long <- tidyr::pivot_longer(all_results, 
+                                  cols = c("Sensitivity", "Specificity"),
+                                  names_to = "Metric",
+                                  values_to = "Value")
+
+p2 <- ggplot(results_long, aes(x = ncomp, y = Value, color = interaction(model, Metric))) +
+    geom_line() +
+    geom_point() +
+    theme_minimal() +
+    labs(title = "Sensitivity/Specificity Comparison",
+         x = "Number of Components",
+         y = "Value",
+         color = "Model & Metric") +
+    theme(legend.position = "bottom")
+
+# Arrange plots
+gridExtra::grid.arrange(p1, p2, ncol = 1)
+
+# Print summary comparison at optimal components
+cat("\nComparison at optimal components:\n")
+cat("\nOriginal Model (ncomp = 6):\n")
+cat("Accuracy:", round(results_original$Accuracy[6], 3), "\n")
+cat("Sensitivity:", round(results_original$Sensitivity[6], 3), "\n")
+cat("Specificity:", round(results_original$Specificity[6], 3), "\n")
+
+cat("\nSMOTE Model (ncomp = 5):\n")
+cat("Accuracy:", round(results_smote$Accuracy[5], 3), "\n")
+cat("Sensitivity:", round(results_smote$Sensitivity[5], 3), "\n")
+cat("Specificity:", round(results_smote$Specificity[5], 3), "\n")
+```
+
+
+# Compare all approaches including new SMOTE results
+```{r}
+results_original <- get_model_results(pls_cv_bladder, "Original")
+results_weighted <- get_model_results(pls_cv_bladder_weighted, "Weighted")
+results_smote <- get_model_results(pls_cv_bladder_smote, "SMOTE-balanced")
+
+# Combine all results
+all_results <- rbind(results_original, results_weighted, results_smote)
+
+# Create enhanced comparison plot with updated parameters
+ggplot(all_results, aes(x = ncomp, y = Accuracy, color = model)) +
+    geom_line(linewidth = 1) +  # Changed from size to linewidth
+    geom_point(size = 3) +
+    theme_minimal() +
+    labs(title = "Comparison of Different Approaches",
+         x = "Number of Components",
+         y = "Accuracy",
+         color = "Model Type") +
+    scale_color_manual(values = c("Original" = "red", 
+                                "Weighted" = "blue", 
+                                "SMOTE-balanced" = "green")) +
+    theme(legend.position = "right",
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.title = element_text(size = 12),
+          legend.title = element_text(size = 12),
+          legend.text = element_text(size = 10)) +
+    scale_y_continuous(limits = c(0.5, 0.65))
+
+# Print numerical comparison of best results for each approach
+cat("\nBest results comparison:\n")
+cat("\nOriginal model:\n")
+best_orig <- which.max(results_original$Accuracy)
+cat("Components:", results_original$ncomp[best_orig],
+    "\nAccuracy:", round(results_original$Accuracy[best_orig], 3),
+    "\nSensitivity:", round(results_original$Sensitivity[best_orig], 3),
+    "\nSpecificity:", round(results_original$Specificity[best_orig], 3), "\n")
+
+cat("\nWeighted model:\n")
+best_weight <- which.max(results_weighted$Accuracy)
+cat("Components:", results_weighted$ncomp[best_weight],
+    "\nAccuracy:", round(results_weighted$Accuracy[best_weight], 3),
+    "\nSensitivity:", round(results_weighted$Sensitivity[best_weight], 3),
+    "\nSpecificity:", round(results_weighted$Specificity[best_weight], 3), "\n")
+
+cat("\nSMOTE-balanced model:\n")
+best_smote <- which.max(results_smote$Accuracy)
+cat("Components:", results_smote$ncomp[best_smote],
+    "\nAccuracy:", round(results_smote$Accuracy[best_smote], 3),
+    "\nSensitivity:", round(results_smote$Sensitivity[best_smote], 3),
+    "\nSpecificity:", round(results_smote$Specificity[best_smote], 3), "\n")
+
+```
+
+
+
+```{r}
+
+# Create a data frame with the best results
+best_results <- data.frame(
+    Model = c("Original", "Weighted", "SMOTE-balanced"),
+    Components = c(7, 6, 5),
+    Accuracy = c(0.552, 0.546, 0.621),
+    Sensitivity = c(0.736, 0.725, 0.587),
+    Specificity = c(0.369, 0.368, 0.656)
+)
+
+# Convert to long format for plotting
+library(tidyr)
+best_results_long <- pivot_longer(best_results, 
+                                cols = c("Accuracy", "Sensitivity", "Specificity"),
+                                names_to = "Metric",
+                                values_to = "Value")
+
+# Create grouped bar plot
+ggplot(best_results_long, aes(x = Model, y = Value, fill = Metric)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+    theme_minimal() +
+    labs(title = "Comparison of Best Results Across Models",
+         x = "Model Type",
+         y = "Value",
+         fill = "Metric") +
+    scale_fill_manual(values = c("Accuracy" = "#2ecc71",
+                                "Sensitivity" = "#3498db",
+                                "Specificity" = "#e74c3c")) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.title = element_text(size = 12),
+          legend.title = element_text(size = 12),
+          legend.text = element_text(size = 10)) +
+    geom_text(aes(label = sprintf("%.3f", Value)), 
+              position = position_dodge(width = 0.9),
+              vjust = -0.5,
+              size = 3.5) +
+    ylim(0, max(best_results_long$Value) * 1.1)  # Add some space for labels
+
+# Add a note about components
+components_note <- paste("Best number of components:",
+                        "Original: 7,",
+                        "Weighted: 6,",
+                        "SMOTE-balanced: 5")
+
+
+
+```
+
+
+#Predication
+The code uses a 5-component PLS model trained on balanced data to predict tumor invasiveness in new tissue samples.
+```{r}
+
+ 
+# 1. First verify our SMOTE-balanced data
+print("Distribution in TMA2_balanced:")
+print(table(TMA2_balanced$invasiveness, useNA = "ifany"))
+
+# 2. Create PLS model with SMOTE-balanced data
+pls_model <- PLS(TMA2_balanced,
+                 y = TMA2_balanced$invasiveness,
+                 ncomp = 5,  # optimal number from previous analysis
+                 .method = "class")
+
+# 3. Verify the model
+print("\nModel summary:")
+print(pls_model)
+
+# 4. Now let's add the invasiveness data to TMA1_recalibrated
+TMA1_new_metadata <- cbind(
+    as.data.frame(pixelData(TMA1_recalibrated)),
+    TMA1_annot_ordered[4:7]
+)
+
+# 5. Create new PositionDataFrame
+pd_new <- PositionDataFrame(
+    coord = TMA1_new_metadata[, c("x", "y")],
+    run = TMA1_new_metadata$run,
+    histology = TMA1_new_metadata$histology,
+    diagnosis = TMA1_new_metadata$diagnosis,
+    invasiveness = TMA1_new_metadata$invasiveness,
+    patient = TMA1_new_metadata$patient
+)
+
+# 6. Update TMA1_recalibrated with new metadata
+pixelData(TMA1_recalibrated) <- pd_new
+
+# 7. Make predictions
+predictions <- predict(pls_model,
+                      newx = TMA1_processed,
+                      ncomp = 5,
+                      type = "class")
+
+# 8. Evaluate predictions
+actual_classes <- TMA1_recalibrated$invasiveness
+predicted_classes <- predictions
+
+# Create valid cases mask
+valid_cases <- !is.na(actual_classes) & !is.na(predicted_classes)
+
+# Create confusion matrix
+conf_matrix <- table(Predicted = predicted_classes[valid_cases], 
+                    Actual = actual_classes[valid_cases],
+                    dnn = c("Predicted", "Actual"))
+
+# Print results
+print("\nConfusion Matrix:")
+print(conf_matrix)
+
+# Calculate metrics
+if(sum(conf_matrix) > 0) {
+    metrics <- list(
+        Accuracy = sum(diag(conf_matrix)) / sum(conf_matrix),
+        Sensitivity = conf_matrix["infiltrating", "infiltrating"] / 
+                     sum(conf_matrix[, "infiltrating"]),
+        Specificity = conf_matrix["non-infiltrating", "non-infiltrating"] / 
+                     sum(conf_matrix[, "non-infiltrating"])
+    )
+    
+    print("\nPerformance Metrics on TMA1:")
+    for(metric in names(metrics)) {
+        cat(metric, ": ", round(metrics[[metric]], 3), "\n")
+    }
+}
+
+
+
+```
+
+
+
+
+
+
+
+

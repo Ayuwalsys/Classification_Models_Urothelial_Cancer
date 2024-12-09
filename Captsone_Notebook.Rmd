@@ -1,0 +1,1347 @@
+---
+title: "Benchmarking Spatial-Aware Classification Models for Urothelial Cancer Subtypes "
+output: html_notebook
+---
+
+
+```{r}
+library(Cardinal)
+library(ggplot2)
+```
+
+# Data import 
+
+```{r load-analyze-files}
+TMA1 <- readImzML("TMA1.imzML")
+TMA2 <- readImzML("TMA2.imzML")
+```
+
+#plot(TMA1, mz=1000.5, tolerance=0.1)
+
+
+```{r viz_analyze_files}
+TMA1 
+TMA2 
+```
+
+```{r load-spectra-annotations}
+TMA1_annotations <- read.delim("TMA1_annotations.txt", header = TRUE, stringsAsFactors = FALSE)
+TMA2_annotations <- read.delim("TMA2_annotations.txt", header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+
+```{r vis_spectra_annotations}
+
+head(TMA1_annotations)
+head(TMA2_annotations)
+
+```
+
+
+```{r}
+library(dplyr)
+
+plot_tissue_info <- function(annotations, plot_type = "diagnosis") {
+  # Ensure annotations are ordered correctly
+  annotations <- annotations %>% arrange(y, x)
+  
+  # Create the plot data
+  plot_data <- annotations %>%
+    select(x, y, diagnosis, histology, invasiveness)
+  
+  # Determine fill based on plot type
+  fill_var <- sym(plot_type)
+  fill_label <- capitalize(plot_type)
+  
+  # Create the plot
+  ggplot(plot_data, aes(x = x, y = y, fill = !!fill_var)) +
+    geom_tile() +
+    scale_fill_viridis_d() +
+    theme_minimal() +
+    labs(title = paste("Tissue", fill_label),
+         x = "X coordinate",
+         y = "Y coordinate",
+         fill = fill_label) +
+    coord_fixed(ratio = 1) +  # This ensures squares are square
+    theme(legend.position = "right")
+}
+
+# Helper function to capitalize first letter
+capitalize <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  x
+}
+
+# Plot for TMA1
+plot_tissue_info(TMA1_annotations, "diagnosis")
+plot_tissue_info(TMA1_annotations, "histology")
+plot_tissue_info(TMA1_annotations, "invasiveness")
+
+# Plot for TMA2
+plot_tissue_info(TMA2_annotations, "diagnosis")
+plot_tissue_info(TMA2_annotations, "histology")
+plot_tissue_info(TMA2_annotations, "invasiveness")
+
+```
+ 
+
+a. Generate single m/z images:
+```{r}
+
+# For TMA1
+plot(TMA2, mz=1000.5, tolerance=0.1)
+
+# For TMA2
+#plot(TMA2, mz=1000.5, tolerance=0.1)
+
+```
+
+
+```{r}
+# Plot spectra from specific pixels
+plot(TMA1, coord = list(c(75, 60), c(100, 80)))
+```
+```{r filter_annotations}
+
+# First load and order the annotations
+TMA1_annot_ordered <- TMA1_annotations[with(TMA1_annotations, order(y, x)), ]
+TMA2_annot_ordered <- TMA2_annotations[with(TMA2_annotations, order(y, x)), ]
+
+# Filter out NA invasiveness values for both TMAs
+TMA1_annot_filtered <- TMA1_annot_ordered[!is.na(TMA1_annot_ordered$invasiveness), ]
+TMA2_annot_filtered <- TMA2_annot_ordered[!is.na(TMA2_annot_ordered$invasiveness), ]
+
+# Check the dimensions and distributions for both
+cat("TMA1 annotations:\n")
+cat("Original rows:", nrow(TMA1_annot_ordered), "\n")
+cat("Filtered rows:", nrow(TMA1_annot_filtered), "\n")
+cat("Invasiveness distribution:\n")
+print(table(TMA1_annot_filtered$invasiveness))
+
+cat("\nTMA2 annotations:\n")
+cat("Original rows:", nrow(TMA2_annot_ordered), "\n")
+cat("Filtered rows:", nrow(TMA2_annot_filtered), "\n")
+cat("Invasiveness distribution:\n")
+print(table(TMA2_annot_filtered$invasiveness))
+```
+
+
+
+
+# Preparing raw and metadata
+
+# 1. First combine metadata with pixel data
+
+```{r create_metadata}
+# For TMA1
+coord_ROI_TMA1 <- coord(TMA1_ROIs)
+coord_string_ROI_1 <- paste(coord_ROI_TMA1$x, coord_ROI_TMA1$y, sep="_")
+coord_string_annot_1 <- paste(TMA1_annot_filtered$x, TMA1_annot_filtered$y, sep="_")
+
+# For TMA2
+coord_ROI_TMA2 <- coord(TMA2_ROIs)
+coord_string_ROI_2 <- paste(coord_ROI_TMA2$x, coord_ROI_TMA2$y, sep="_")
+coord_string_annot_2 <- paste(TMA2_annot_filtered$x, TMA2_annot_filtered$y, sep="_")
+
+# Create metadata for both TMAs
+TMA1_metadata <- cbind(
+    as.data.frame(pixelData(TMA1_ROIs)),
+    TMA1_annot_filtered[match(coord_string_ROI_1, coord_string_annot_1), 
+                       c("histology", "diagnosis", "invasiveness", "patient")]
+)
+
+TMA2_metadata <- cbind(
+    as.data.frame(pixelData(TMA2_ROIs)),
+    TMA2_annot_filtered[match(coord_string_ROI_2, coord_string_annot_2), 
+                       c("histology", "diagnosis", "invasiveness", "patient")]
+)
+
+# Verify the results
+cat("TMA1 metadata verification:\n")
+cat("Number of rows:", nrow(TMA1_metadata), "\n")
+cat("Matches ROI count:", nrow(TMA1_metadata) == length(TMA1_ROIs), "\n")
+
+cat("\nTMA2 metadata verification:\n")
+cat("Number of rows:", nrow(TMA2_metadata), "\n")
+cat("Matches ROI count:", nrow(TMA2_metadata) == length(TMA2_ROIs), "\n")
+```
+
+let's create the PositionDataFrames for both TMAs:
+```{r create_position_dataframes}
+# Create PositionDataFrame for TMA1
+pd <- PositionDataFrame(
+    coord = TMA1_metadata[, c("x", "y")],
+    run = TMA1_metadata$run,
+    histology = TMA1_metadata$histology,
+    diagnosis = TMA1_metadata$diagnosis,
+    invasiveness = TMA1_metadata$invasiveness,
+    patient = TMA1_metadata$patient
+)
+
+# Create PositionDataFrame for TMA2
+pd2 <- PositionDataFrame(
+    coord = TMA2_metadata[, c("x", "y")],
+    run = TMA2_metadata$run,
+    histology = TMA2_metadata$histology,
+    diagnosis = TMA2_metadata$diagnosis,
+    invasiveness = TMA2_metadata$invasiveness,
+    patient = TMA2_metadata$patient
+)
+
+# Verify the PositionDataFrames
+cat("TMA1 PositionDataFrame structure:\n")
+str(pd)
+
+cat("\nTMA2 PositionDataFrame structure:\n")
+str(pd2)
+
+# Check class distributions in PositionDataFrames
+cat("\nTMA1 invasiveness distribution:\n")
+print(table(pd$invasiveness))
+
+cat("\nTMA2 invasiveness distribution:\n")
+print(table(pd2$invasiveness))
+```
+
+## The PositionDataFrames are correctly created with all metadata and proper distributions. Now let's proceed with attaching these PositionDataFrames to our MSI data and prepare for classification:
+```{r attach_position_data}
+# Attach PositionDataFrames to MSI data
+TMA1_ROIs_final <- TMA1_ROIs
+pixelData(TMA1_ROIs_final) <- pd
+
+TMA2_ROIs_final <- TMA2_ROIs
+pixelData(TMA2_ROIs_final) <- pd2
+
+# Verify the attachments
+cat("TMA1 data verification:\n")
+cat("Number of spectra:", length(TMA1_ROIs_final), "\n")
+cat("Invasiveness distribution:\n")
+print(table(pixelData(TMA1_ROIs_final)$invasiveness))
+
+cat("\nTMA2 data verification:\n")
+cat("Number of spectra:", length(TMA2_ROIs_final), "\n")
+cat("Invasiveness distribution:\n")
+print(table(pixelData(TMA2_ROIs_final)$invasiveness))
+
+# Save the processed data objects (optional)
+save(TMA1_ROIs_final, file="TMA1_processed.RData")
+save(TMA2_ROIs_final, file="TMA2_processed.RData")
+```
+
+
+```{r preprocessing}
+# 1. Bin the data to unit m/z resolution
+cat("Binning spectra...\n")
+TMA1_binned <- bin(TMA1_ROIs_final, resolution=1, units="mz")
+TMA2_binned <- bin(TMA2_ROIs_final, resolution=1, units="mz")
+
+# 2. Normalize the binned data using TIC (Total Ion Current) normalization
+cat("Normalizing spectra...\n")
+TMA1_normalized <- normalize(TMA1_binned, method="tic")
+TMA2_normalized <- normalize(TMA2_binned, method="tic")
+
+# Verify the preprocessing results
+cat("\nTMA1 preprocessing verification:\n")
+cat("Number of spectra:", length(TMA1_normalized), "\n")
+cat("Number of features:", length(mz(TMA1_normalized)), "\n")
+cat("Invasiveness distribution:\n")
+print(table(pixelData(TMA1_normalized)$invasiveness))
+
+cat("\nTMA2 preprocessing verification:\n")
+cat("Number of spectra:", length(TMA2_normalized), "\n")
+cat("Number of features:", length(mz(TMA2_normalized)), "\n")
+cat("Invasiveness distribution:\n")
+print(table(pixelData(TMA2_normalized)$invasiveness))
+
+# Optional: Plot mean spectra to verify normalization
+plot(TMA1_normalized, main="TMA1 Mean Spectrum After Preprocessing")
+plot(TMA2_normalized, main="TMA2 Mean Spectrum After Preprocessing")
+
+# Save preprocessed data (optional)
+save(TMA1_normalized, file="TMA1_preprocessed.RData")
+save(TMA2_normalized, file="TMA2_preprocessed.RData")
+```
+
+
+Let's set up the cross-validation for our classification. We'll use TMA2 for training (with cross-validation) and TMA1 for independent testing:
+
+
+```{r setup_cross_validation}
+# Get unique patients from TMA2 (training set)
+TMA2_patients <- unique(pixelData(TMA2_normalized)$patient)
+cat("Number of unique patients in TMA2:", length(TMA2_patients), "\n")
+
+# Create 5 folds with stratification by patient
+set.seed(123) # for reproducibility
+n_folds <- 5
+
+# Create patient-level folds
+folds <- split(sample(TMA2_patients), rep(1:n_folds, length.out=length(TMA2_patients)))
+
+# Create fold assignments dataframe
+fold_assignments <- data.frame(
+    patient = unlist(folds),
+    fold = rep(1:n_folds, sapply(folds, length))
+)
+
+# Add fold assignments to pixel data
+pixelData(TMA2_normalized)$fold <- factor(
+    match(pixelData(TMA2_normalized)$patient, fold_assignments$patient) %% n_folds + 1
+)
+
+# Verify fold assignments
+cat("\nFold sizes (number of spectra):\n")
+print(table(pixelData(TMA2_normalized)$fold))
+
+# Check class distribution within each fold
+cat("\nClass distribution in each fold:\n")
+for(i in 1:n_folds) {
+    cat("\nFold", i, ":\n")
+    print(table(pixelData(TMA2_normalized)$invasiveness[pixelData(TMA2_normalized)$fold == i]))
+}
+
+# Verify patient assignment
+cat("\nPatient distribution across folds:\n")
+print(fold_assignments)
+
+# Save fold assignments for reproducibility (optional)
+save(fold_assignments, file="cv_folds.RData")
+```
+
+
+Let's proceed with the classification using PLS (Partial Least Squares) through Cardinal's crossValidate function:
+```{r classification}
+# Set up cross-validation parameters
+ncomp_range <- 1:10  # Test different numbers of components
+
+# Run cross-validation
+cat("Running cross-validation...\n")
+# Keep data in MSImageSet format
+cv_results <- crossValidate(
+    fit. = PLS,
+    x = TMA2_normalized,  # Use the normalized MSImageSet directly
+    y = pixelData(TMA2_normalized)$invasiveness,
+    ncomp = ncomp_range,
+    .method = "class",
+    fold = fold_vector,
+    verbose = TRUE
+)
+
+# Extract and summarize results
+results <- data.frame(
+    ncomp = ncomp_range,
+    Accuracy = numeric(length(ncomp_range)),
+    Sensitivity = numeric(length(ncomp_range)),
+    Specificity = numeric(length(ncomp_range))
+)
+
+# Calculate performance metrics for each number of components
+for(i in seq_along(ncomp_range)) {
+    fold_metrics <- sapply(cv_results@model$scores, function(x) {
+        c(inf_recall = x["infiltrating", "Recall", i],
+          noninf_recall = x["non-infiltrating", "Recall", i])
+    })
+    
+    results$Sensitivity[i] <- mean(fold_metrics["inf_recall",], na.rm = TRUE)
+    results$Specificity[i] <- mean(fold_metrics["noninf_recall",], na.rm = TRUE)
+    results$Accuracy[i] <- mean(c(results$Sensitivity[i], results$Specificity[i]))
+}
+
+# Plot results
+par(mfrow = c(2,1))
+
+# Accuracy plot
+plot(results$ncomp, results$Accuracy,
+     type = "b", col = "black",
+     xlab = "Number of Components",
+     ylab = "Balanced Accuracy",
+     main = "Cross-validation Results",
+     ylim = c(0,1))
+grid()
+
+# Sensitivity/Specificity plot
+plot(results$ncomp, results$Sensitivity,
+     type = "b", col = "blue",
+     xlab = "Number of Components",
+     ylab = "Rate",
+     main = "Sensitivity/Specificity by Components",
+     ylim = c(0,1))
+lines(results$ncomp, results$Specificity,
+      type = "b", col = "red")
+legend("topright", 
+       legend = c("Sensitivity (Infiltrating)", "Specificity (Non-infiltrating)"),
+       col = c("blue", "red"),
+       lty = 1,
+       pch = 1)
+grid()
+
+# Print results table
+cat("\nCross-validation results:\n")
+print(round(results, 3))
+
+# Find optimal number of components
+best_ncomp <- which.max(results$Accuracy)
+cat("\nOptimal number of components:", best_ncomp, "\n")
+cat("Best balanced accuracy:", round(results$Accuracy[best_ncomp], 3), "\n")
+```
+
+
+
+
+```{r improve_accuracy}
+# Hyperparameter tuning: Try a wider range of components
+ncomp_range_extended <- 1:20  # Extend the range
+
+# Run cross-validation with extended range
+cat("Running extended cross-validation...\n")
+cv_results_extended <- crossValidate(
+    fit. = PLS,
+    x = TMA2_normalized,
+    y = pixelData(TMA2_normalized)$invasiveness,
+    ncomp = ncomp_range_extended,
+    .method = "class",
+    fold = fold_vector,
+    verbose = TRUE
+)
+
+# Extract and summarize results for extended range
+results_extended <- data.frame(
+    ncomp = ncomp_range_extended,
+    Accuracy = numeric(length(ncomp_range_extended)),
+    Sensitivity = numeric(length(ncomp_range_extended)),
+    Specificity = numeric(length(ncomp_range_extended))
+)
+
+# Calculate performance metrics for each number of components
+for(i in seq_along(ncomp_range_extended)) {
+    fold_metrics <- sapply(cv_results_extended@model$scores, function(x) {
+        c(inf_recall = x["infiltrating", "Recall", i],
+          noninf_recall = x["non-infiltrating", "Recall", i])
+    })
+    
+    results_extended$Sensitivity[i] <- mean(fold_metrics["inf_recall",], na.rm = TRUE)
+    results_extended$Specificity[i] <- mean(fold_metrics["noninf_recall",], na.rm = TRUE)
+    results_extended$Accuracy[i] <- mean(c(results_extended$Sensitivity[i], results_extended$Specificity[i]))
+}
+
+# Plot extended results
+par(mfrow = c(2,1))
+
+# Accuracy plot
+plot(results_extended$ncomp, results_extended$Accuracy,
+     type = "b", col = "black",
+     xlab = "Number of Components",
+     ylab = "Balanced Accuracy",
+     main = "Extended Cross-validation Results",
+     ylim = c(0,1))
+grid()
+
+# Sensitivity/Specificity plot
+plot(results_extended$ncomp, results_extended$Sensitivity,
+     type = "b", col = "blue",
+     xlab = "Number of Components",
+     ylab = "Rate",
+     main = "Sensitivity/Specificity by Components (Extended)",
+     ylim = c(0,1))
+lines(results_extended$ncomp, results_extended$Specificity,
+      type = "b", col = "red")
+legend("topright", 
+       legend = c("Sensitivity (Infiltrating)", "Specificity (Non-infiltrating)"),
+       col = c("blue", "red"),
+       lty = 1,
+       pch = 1)
+grid()
+
+# Print extended results table
+cat("\nExtended cross-validation results:\n")
+print(round(results_extended, 3))
+
+# Find optimal number of components in extended range
+best_ncomp_extended <- which.max(results_extended$Accuracy)
+cat("\nOptimal number of components (extended):", best_ncomp_extended, "\n")
+cat("Best balanced accuracy (extended):", round(results_extended$Accuracy[best_ncomp_extended], 3), "\n")
+```
+
+# evaluate the final model (using 17 components) on TMA1 and create comprehensive visualizations:
+
+```{r final_model_evaluation}
+# Train final model with optimal parameters
+final_model <- PLS(
+    TMA2_normalized,
+    y = pixelData(TMA2_normalized)$invasiveness,
+    ncomp = best_ncomp_extended,  # Using 17 components
+    .method = "class"
+)
+
+# Predict on TMA1 (independent test set)
+predictions <- predict(final_model, 
+                      newx = TMA1_normalized,
+                      .method = "class")
+
+# Check dimensions
+cat("\nDimension Check:\n")
+cat("Number of predictions:", nrow(predictions), "\n")
+cat("Number of actual values:", length(pixelData(TMA1_normalized)$invasiveness), "\n")
+
+# Create subsets matching the actual data length
+predictions_subset <- predictions[1:length(pixelData(TMA1_normalized)$invasiveness), ]
+predictions_labels <- ifelse(predictions_subset[,1] > predictions_subset[,2], 
+                           "infiltrating", "non-infiltrating")
+
+# Create confusion matrix
+conf_matrix <- table(
+    Predicted = predictions_labels,
+    Actual = pixelData(TMA1_normalized)$invasiveness
+)
+
+# Calculate performance metrics
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+sensitivity <- conf_matrix["infiltrating", "infiltrating"] / sum(conf_matrix[, "infiltrating"])
+specificity <- conf_matrix["non-infiltrating", "non-infiltrating"] / sum(conf_matrix[, "non-infiltrating"])
+balanced_accuracy <- mean(c(sensitivity, specificity))
+precision <- conf_matrix["infiltrating", "infiltrating"] / sum(conf_matrix["infiltrating", ])
+f1_score <- 2 * (precision * sensitivity) / (precision + sensitivity)
+
+# Print comprehensive results
+cat("\nFinal Model Performance on TMA1 (Independent Test Set):\n")
+cat("----------------------------------------------------\n")
+cat("Confusion Matrix:\n")
+print(conf_matrix)
+cat("\nPerformance Metrics:\n")
+cat("Overall Accuracy:", round(accuracy, 3), "\n")
+cat("Balanced Accuracy:", round(balanced_accuracy, 3), "\n")
+cat("Sensitivity (Infiltrating):", round(sensitivity, 3), "\n")
+cat("Specificity (Non-infiltrating):", round(specificity, 3), "\n")
+cat("Precision:", round(precision, 3), "\n")
+cat("F1 Score:", round(f1_score, 3), "\n")
+
+# Visualizations
+par(mfrow = c(2,2))
+
+
+# 1. ROC Curve
+library(pROC)
+roc_obj <- roc(pixelData(TMA1_normalized)$invasiveness, predictions_subset[,1])
+plot(roc_obj, main = "ROC Curve")
+text(0.6, 0.4, paste("AUC =", round(auc(roc_obj), 3)))
+
+# 2. Prediction Probabilities Distribution
+hist(predictions_subset[,1], breaks=30,
+     main="Distribution of Prediction Probabilities",
+     xlab="Probability of Infiltrating",
+     col=rgb(0,0,1,0.5))
+abline(v=0.5, col="red", lty=2)
+
+# 3. Spatial distribution of predictions
+plot(coord(TMA1_normalized)$x, coord(TMA1_normalized)$y,
+     col = factor(predictions_labels),
+     pch = 16, cex = 0.8,
+     main = "Spatial Distribution of Predictions",
+     xlab = "X coordinate", ylab = "Y coordinate")
+legend("topright", legend = levels(factor(predictions_labels)),
+       col = 1:2, pch = 16)
+
+# 4. Prediction confidence by class
+boxplot(predictions_subset[,1] ~ pixelData(TMA1_normalized)$invasiveness,
+        main = "Prediction Confidence by True Class",
+        xlab = "True Class",
+        ylab = "Probability of Infiltrating")
+abline(h=0.5, col="red", lty=2)
+
+# Create detailed results dataframe
+results_df <- data.frame(
+    x = coord(TMA1_normalized)$x,
+    y = coord(TMA1_normalized)$y,
+    true_class = pixelData(TMA1_normalized)$invasiveness,
+    predicted_class = predictions_labels,
+    infiltrating_prob = predictions_subset[,1],
+    patient = pixelData(TMA1_normalized)$patient
+)
+
+
+```
+```{r}
+library(ggplot2)
+library(gridExtra)
+
+# 1. Confusion Matrix Plot
+conf_matrix <- matrix(c(305, 145, 104, 124), nrow = 2, byrow = TRUE)
+rownames(conf_matrix) <- c("infiltrating", "non-infiltrating")
+colnames(conf_matrix) <- c("infiltrating", "non-infiltrating")
+
+conf_matrix_df <- as.data.frame(as.table(conf_matrix))
+names(conf_matrix_df) <- c("Predicted", "Actual", "Freq")
+
+p1 <- ggplot(conf_matrix_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = Freq), color = "black", size = 5) +
+    scale_fill_gradient(low = "white", high = "#FF9999") +
+    theme_minimal() +
+    labs(title = "Confusion Matrix: Partial Least Square(PLS)",
+         x = "Actual Class",
+         y = "Predicted Class")
+
+# 2. Performance Metrics Bar Plot
+metrics_df <- data.frame(
+    Metric = c("Overall Accuracy", "Balanced Accuracy", "Sensitivity", 
+               "Specificity", "Precision", "F1 Score"),
+    Value = c(0.633, 0.603, 0.746, 0.461, 0.678, 0.71)
+)
+
+p2 <- ggplot(metrics_df, aes(x = reorder(Metric, -Value), y = Value)) +
+    geom_bar(stat = "identity", fill = "#FF9999") +
+    coord_flip() +
+    theme_minimal() +
+    labs(title = "Performance Metrics",
+         x = "",
+         y = "Score") +
+    geom_text(aes(label = sprintf("%.3f", Value)), hjust = -0.1)
+
+# 3. ROC Curve
+roc_obj <- roc(pixelData(TMA1_normalized)$invasiveness, predictions_subset[,1])
+p3 <- ggplot(data.frame(
+    Specificity = 1 - roc_obj$specificities,
+    Sensitivity = roc_obj$sensitivities
+), aes(x = Specificity, y = Sensitivity)) +
+    geom_line(size = 1) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+    theme_minimal() +
+    annotate("text", x = 0.75, y = 0.25, 
+             label = paste("AUC =", round(auc(roc_obj), 3))) +
+    labs(title = "ROC Curve")
+
+# Arrange all plots
+grid.arrange(p1, p2, p3, ncol = 1)
+
+# Print performance metrics summary
+cat("\nFinal Model Performance Summary:\n")
+cat("--------------------------------\n")
+cat("Overall Accuracy:", round(0.633, 3), "\n")
+cat("Balanced Accuracy:", round(0.603, 3), "\n")
+cat("Sensitivity (Infiltrating):", round(0.746, 3), "\n")
+cat("Specificity (Non-infiltrating):", round(0.461, 3), "\n")
+cat("Precision:", round(0.678, 3), "\n")
+cat("F1 Score:", round(0.71, 3), "\n")
+
+```
+
+
+
+```{r patient_level_analysis}
+library(ggplot2)
+library(gridExtra)
+
+# Create data frame for visualization
+patient_summary <- data.frame(
+    Patient = patient_summary$Patient,
+    True_Class = patient_summary$True_Class,
+    Accuracy = patient_summary$Accuracy,
+    N_Samples = patient_summary$N_Samples
+)
+
+# 1. Bubble plot: Accuracy vs Sample Size with patient labels
+p1 <- ggplot(patient_summary, 
+             aes(x = N_Samples, y = Accuracy, 
+                 color = True_Class, size = N_Samples)) +
+    geom_point(alpha = 0.6) +
+    geom_text(aes(label = Patient), vjust = -1, size = 3) +
+    theme_minimal() +
+    labs(title = "Patient Performance Overview",
+         x = "Number of Samples",
+         y = "Accuracy",
+         size = "Sample Size") +
+    scale_color_manual(values = c("infiltrating" = "#FF9999", 
+                                 "non-infiltrating" = "#99CCFF")) +
+    theme(legend.position = "right")
+
+# 2. Bar plot with sample size indication
+p2 <- ggplot(patient_summary, 
+             aes(x = reorder(Patient, -Accuracy), y = Accuracy)) +
+    geom_bar(aes(fill = True_Class), stat = "identity") +
+    geom_text(aes(label = N_Samples), vjust = -0.5, size = 3) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = "Patient Accuracy with Sample Sizes",
+         x = "Patient",
+         y = "Accuracy",
+         fill = "True Class") +
+    scale_fill_manual(values = c("infiltrating" = "#FF9999", 
+                                "non-infiltrating" = "#99CCFF"))
+
+# Arrange plots
+grid.arrange(p1, p2, ncol = 1, heights = c(1, 1))
+
+# Print summary statistics grouped by sample size
+cat("\nPerformance by Sample Size Groups:\n")
+cat("--------------------------------\n")
+
+# Create sample size categories
+patient_summary$Size_Group <- cut(patient_summary$N_Samples, 
+                                breaks = c(0, 10, 50, 100, Inf),
+                                labels = c("Very Small (≤10)", 
+                                         "Small (11-50)", 
+                                         "Medium (51-100)",
+                                         "Large (>100)"))
+
+# Calculate mean accuracy by size group
+size_group_summary <- aggregate(Accuracy ~ Size_Group, 
+                              data = patient_summary, 
+                              FUN = function(x) c(mean = mean(x), 
+                                                count = length(x)))
+
+print(data.frame(
+    Size_Group = size_group_summary$Size_Group,
+    Mean_Accuracy = round(size_group_summary$Accuracy[,1], 3),
+    Number_of_Patients = size_group_summary$Accuracy[,2]
+))
+```
+
+# SSC method
+```{r}
+# 1. Setup cross-validation with spatial awareness
+set.seed(123)
+# Get unique patients from TMA2 (training set)
+TMA2_patients <- unique(pixelData(TMA2_normalized)$patient)
+n_folds <- 5
+
+# Create patient-level folds
+folds <- split(sample(TMA2_patients), rep(1:n_folds, length.out=length(TMA2_patients)))
+
+# Create fold assignments
+fold_assignments <- data.frame(
+    patient = unlist(folds),
+    fold = rep(1:n_folds, sapply(folds, length))
+)
+
+# Add fold assignments to pixel data
+pixelData(TMA2_normalized)$fold <- factor(
+    match(pixelData(TMA2_normalized)$patient, fold_assignments$patient) %% n_folds + 1
+)
+
+# 2. Train spatial shrunken centroids with cross-validation
+# Try different shrinkage thresholds
+thresholds <- seq(0, 10, by = 0.5)
+cv_results <- list()
+
+for(threshold in thresholds) {
+    cat("Testing threshold:", threshold, "\n")
+    
+    fold_metrics <- matrix(NA, nrow = n_folds, ncol = 3)  # accuracy, sensitivity, specificity
+    colnames(fold_metrics) <- c("accuracy", "sensitivity", "specificity")
+    
+    for(i in 1:n_folds) {
+        # Split data into training and validation
+        train_idx <- pixelData(TMA2_normalized)$fold != i
+        valid_idx <- pixelData(TMA2_normalized)$fold == i
+        
+        # Train spatial shrunken centroids model
+        ssc_model <- spatialShrunkenCentroids(
+            x = TMA2_normalized[,train_idx],
+            y = pixelData(TMA2_normalized)$invasiveness[train_idx],
+            r = 1,  # spatial radius
+            s = threshold,  # shrinkage threshold
+            weights = "gaussian"
+        )
+        
+        # Make predictions
+        predictions <- predict(ssc_model, 
+                            newdata = TMA2_normalized[,valid_idx],
+                            type = "class")
+        
+        # Calculate metrics
+        conf_matrix <- table(
+            Predicted = predictions,
+            Actual = pixelData(TMA2_normalized)$invasiveness[valid_idx]
+        )
+        
+        if(all(dim(conf_matrix) == 2)) {
+            sensitivity <- conf_matrix["infiltrating", "infiltrating"] / 
+                         sum(conf_matrix[, "infiltrating"])
+            specificity <- conf_matrix["non-infiltrating", "non-infiltrating"] / 
+                         sum(conf_matrix[, "non-infiltrating"])
+            accuracy <- mean(c(sensitivity, specificity))
+            
+            fold_metrics[i,] <- c(accuracy, sensitivity, specificity)
+        }
+    }
+    
+    # Store average results
+    cv_results[[as.character(threshold)]] <- colMeans(fold_metrics, na.rm = TRUE)
+}
+
+# Would you like me to continue with the rest of the implementation (optimal threshold selection, final model training, and visualization)?
+
+
+```
+
+#Test on TMA1
+```{r}
+# Train final model with optimal threshold on subset data
+final_ssc_model <- spatialShrunkenCentroids(
+    x = TMA2_subset,
+    y = pixelData(TMA2_subset)$invasiveness,
+    r = 1,  # spatial radius
+    s = optimal_threshold,
+    weights = "gaussian"
+)
+
+# Make predictions on test set
+test_predictions <- predict(final_ssc_model, 
+                          newdata = TMA1_subset,
+                          type = "class")
+
+# Calculate final performance metrics
+conf_matrix_ssc <- table(
+    Predicted = test_predictions,
+    Actual = pixelData(TMA1_subset)$invasiveness
+)
+
+accuracy_ssc <- sum(diag(conf_matrix_ssc)) / sum(conf_matrix_ssc)
+sensitivity_ssc <- conf_matrix_ssc["infiltrating", "infiltrating"] / 
+                  sum(conf_matrix_ssc[, "infiltrating"])
+specificity_ssc <- conf_matrix_ssc["non-infiltrating", "non-infiltrating"] / 
+                  sum(conf_matrix_ssc[, "non-infiltrating"])
+balanced_accuracy_ssc <- mean(c(sensitivity_ssc, specificity_ssc))
+precision_ssc <- conf_matrix_ssc["infiltrating", "infiltrating"] / 
+                sum(conf_matrix_ssc["infiltrating", ])
+f1_score_ssc <- 2 * (precision_ssc * sensitivity_ssc) / 
+                (precision_ssc + sensitivity_ssc)
+
+# Print initial results
+cat("\nConfusion Matrix:\n")
+print(conf_matrix_ssc)
+cat("\nPerformance Metrics:\n")
+cat("Accuracy:", round(accuracy_ssc, 3), "\n")
+cat("Balanced Accuracy:", round(balanced_accuracy_ssc, 3), "\n")
+cat("Sensitivity:", round(sensitivity_ssc, 3), "\n")
+cat("Specificity:", round(specificity_ssc, 3), "\n")
+cat("F1 Score:", round(f1_score_ssc, 3), "\n")
+
+
+```
+
+
+
+# Machine Learning Approach: Random Forest
+```{r}
+
+# Convert sparse matrix to regular matrix and prepare data
+train_data <- as.matrix(spectra(TMA2_normalized))
+train_data <- as.data.frame(t(train_data))
+train_labels <- pixelData(TMA2_normalized)$invasiveness
+
+test_data <- as.matrix(spectra(TMA1_normalized))
+test_data <- as.data.frame(t(test_data))
+test_labels <- pixelData(TMA1_normalized)$invasiveness
+
+# Print dimensions for verification
+cat("Data Dimensions:\n")
+cat("Training data:", dim(train_data), "\n")
+cat("Testing data:", dim(test_data), "\n")
+cat("Training labels:", length(train_labels), "\n")
+cat("Testing labels:", length(test_labels), "\n")
+
+# Train Random Forest model
+library(randomForest)
+set.seed(123)  # for reproducibility
+rf_model <- randomForest(x = train_data, 
+                        y = as.factor(train_labels), 
+                        ntree = 500,  # number of trees
+                        mtry = sqrt(ncol(train_data)),  # features per split
+                        importance = TRUE)  # calculate variable importance
+
+# Make predictions
+rf_predictions <- predict(rf_model, newdata = test_data)
+
+# Create confusion matrix
+conf_matrix_rf <- table(Predicted = rf_predictions, 
+                       Actual = test_labels)
+
+# Calculate performance metrics
+accuracy_rf <- sum(diag(conf_matrix_rf)) / sum(conf_matrix_rf)
+sensitivity_rf <- conf_matrix_rf["infiltrating", "infiltrating"] / sum(conf_matrix_rf[, "infiltrating"])
+specificity_rf <- conf_matrix_rf["non-infiltrating", "non-infiltrating"] / sum(conf_matrix_rf[, "non-infiltrating"])
+balanced_accuracy_rf <- mean(c(sensitivity_rf, specificity_rf))
+precision_rf <- conf_matrix_rf["infiltrating", "infiltrating"] / sum(conf_matrix_rf["infiltrating", ])
+f1_score_rf <- 2 * (precision_rf * sensitivity_rf) / (precision_rf + sensitivity_rf)
+
+# Print results
+cat("\nRandom Forest Model Performance:\n")
+cat("-----------------------------\n")
+cat("Confusion Matrix:\n")
+print(conf_matrix_rf)
+cat("\nPerformance Metrics:\n")
+cat("Overall Accuracy:", round(accuracy_rf, 3), "\n")
+cat("Balanced Accuracy:", round(balanced_accuracy_rf, 3), "\n")
+cat("Sensitivity (Infiltrating):", round(sensitivity_rf, 3), "\n")
+cat("Specificity (Non-infiltrating):", round(specificity_rf, 3), "\n")
+cat("Precision:", round(precision_rf, 3), "\n")
+cat("F1 Score:", round(f1_score_rf, 3), "\n")
+
+# Get variable importance
+importance_scores <- importance(rf_model)
+top_features <- head(sort(importance_scores[,1], decreasing=TRUE), 10)
+cat("\nTop 10 Most Important Features:\n")
+print(top_features)
+
+```
+
+```{r}
+# Visualize Random Forest Results
+library(ggplot2)
+
+# 1. Confusion Matrix Visualization
+conf_matrix_df <- as.data.frame(as.table(conf_matrix_rf))
+names(conf_matrix_df) <- c("Predicted", "Actual", "Freq")
+
+ggplot(conf_matrix_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq)) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix-Random Forest Model",
+       x = "Actual Class",
+       y = "Predicted Class")
+
+# 2. Performance Metrics Visualization
+metrics_df <- data.frame(
+  Metric = c("Overall Accuracy", "Balanced Accuracy", "Sensitivity", "Specificity", "Precision", "F1 Score"),
+  Value = c(accuracy_rf, balanced_accuracy_rf, sensitivity_rf, specificity_rf, precision_rf, f1_score_rf)
+)
+
+ggplot(metrics_df, aes(x = reorder(Metric, -Value), y = Value)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Random Forest Model Performance Metrics",
+       x = "Metric",
+       y = "Score") +
+  geom_text(aes(label = sprintf("%.3f", Value)), hjust = -0.1)
+
+# 3. Feature Importance Plot
+# Get m/z values for top features
+mz_values <- mz(TMA2_normalized)
+importance_df <- data.frame(
+  Feature = names(top_features),
+  Importance = as.numeric(top_features),
+  mz = mz_values[as.numeric(gsub("V", "", names(top_features)))]
+)
+
+ggplot(importance_df, aes(x = reorder(sprintf("%.2f", mz), Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title = "Top 10 Most Important Features",
+       x = "m/z Value",
+       y = "Feature Importance Score")
+
+```
+
+
+
+
+
+```{r}
+# Install and load ROSE package
+#install.packages("ROSE")
+library(ROSE)
+
+# Check original class distribution
+cat("Original class distribution:\n")
+print(table(train_labels))
+
+# Apply ROSE to balance the dataset
+set.seed(123)  # for reproducibility
+balanced_data <- ROSE(
+    formula = as.factor(train_labels) ~ .,
+    data = data.frame(train_data_selected, train_labels = train_labels),
+    N = nrow(train_data_selected),
+    seed = 123
+)$data
+
+# Check new class distribution
+cat("\nBalanced class distribution:\n")
+print(table(balanced_data$train_labels))
+
+# Train Random Forest with balanced data
+balanced_rf <- randomForest(
+    x = balanced_data[, -ncol(balanced_data)],
+    y = as.factor(balanced_data$train_labels),
+    ntree = 1000,
+    mtry = 40,
+    importance = TRUE
+)
+
+# Make predictions
+balanced_predictions <- predict(balanced_rf, newdata = test_data_selected)
+
+# Calculate performance metrics
+balanced_conf_matrix <- table(
+    Predicted = balanced_predictions, 
+    Actual = test_labels
+)
+
+# Print results
+cat("\nBalanced Random Forest Performance:\n")
+cat("--------------------------------\n")
+cat("Confusion Matrix:\n")
+print(balanced_conf_matrix)
+
+# Calculate and print metrics
+balanced_accuracy <- sum(diag(balanced_conf_matrix)) / sum(balanced_conf_matrix)
+balanced_sensitivity <- balanced_conf_matrix["infiltrating", "infiltrating"] / 
+                       sum(balanced_conf_matrix[, "infiltrating"])
+balanced_specificity <- balanced_conf_matrix["non-infiltrating", "non-infiltrating"] / 
+                       sum(balanced_conf_matrix[, "non-infiltrating"])
+balanced_balanced_acc <- mean(c(balanced_sensitivity, balanced_specificity))
+balanced_precision <- balanced_conf_matrix["infiltrating", "infiltrating"] / 
+                     sum(balanced_conf_matrix["infiltrating", ])
+balanced_f1 <- 2 * (balanced_precision * balanced_sensitivity) / 
+              (balanced_precision + balanced_sensitivity)
+
+cat("\nPerformance Metrics:\n")
+cat("Overall Accuracy:", round(balanced_accuracy, 3), "\n")
+cat("Balanced Accuracy:", round(balanced_balanced_acc, 3), "\n")
+cat("Sensitivity (Infiltrating):", round(balanced_sensitivity, 3), "\n")
+cat("Specificity (Non-infiltrating):", round(balanced_specificity, 3), "\n")
+cat("Precision:", round(balanced_precision, 3), "\n")
+cat("F1 Score:", round(balanced_f1, 3), "\n")
+
+
+```
+
+#try a different approach using class weights instead:
+
+```{r}
+
+# Train Random Forest with class weights
+weighted_rf <- randomForest(
+    x = train_data_selected,
+    y = as.factor(train_labels),
+    ntree = 1000,
+    mtry = 40,
+    classwt = c(
+        "infiltrating" = 1,
+        "non-infiltrating" = 1.5
+    ),
+    importance = TRUE
+)
+
+# Make predictions
+weighted_predictions <- predict(weighted_rf, newdata = test_data_selected)
+
+# Calculate performance metrics
+weighted_conf_matrix <- table(
+    Predicted = weighted_predictions, 
+    Actual = test_labels
+)
+
+# Print results
+cat("\nWeighted Random Forest Performance:\n")
+cat("--------------------------------\n")
+cat("Confusion Matrix:\n")
+print(weighted_conf_matrix)
+
+# Calculate metrics
+weighted_accuracy <- sum(diag(weighted_conf_matrix)) / sum(weighted_conf_matrix)
+weighted_sensitivity <- weighted_conf_matrix["infiltrating", "infiltrating"] / 
+                       sum(weighted_conf_matrix[, "infiltrating"])
+weighted_specificity <- weighted_conf_matrix["non-infiltrating", "non-infiltrating"] / 
+                       sum(weighted_conf_matrix[, "non-infiltrating"])
+weighted_balanced_acc <- mean(c(weighted_sensitivity, weighted_specificity))
+weighted_precision <- weighted_conf_matrix["infiltrating", "infiltrating"] / 
+                     sum(weighted_conf_matrix["infiltrating", ])
+weighted_f1 <- 2 * (weighted_precision * weighted_sensitivity) / 
+              (weighted_precision + weighted_sensitivity)
+
+cat("\nPerformance Metrics:\n")
+cat("Overall Accuracy:", round(weighted_accuracy, 3), "\n")
+cat("Balanced Accuracy:", round(weighted_balanced_acc, 3), "\n")
+cat("Sensitivity (Infiltrating):", round(weighted_sensitivity, 3), "\n")
+cat("Specificity (Non-infiltrating):", round(weighted_specificity, 3), "\n")
+cat("Precision:", round(weighted_precision, 3), "\n")
+cat("F1 Score:", round(weighted_f1, 3), "\n")
+
+```
+
+
+
+```{r}
+
+# 1. Parameter Tuning
+# Try different mtry values and number of trees
+mtry_values <- seq(20, 60, by = 10)
+ntree_values <- c(500, 750, 1000)
+
+cat("Starting Parameter Tuning...\n")
+tuning_results <- data.frame()
+
+for(mtry in mtry_values) {
+    for(ntree in ntree_values) {
+        cat("Testing mtry =", mtry, "ntree =", ntree, "\n")
+        
+        rf_tuned <- randomForest(x = train_data, 
+                                y = as.factor(train_labels),
+                                ntree = ntree,
+                                mtry = mtry)
+        
+        pred <- predict(rf_tuned, newdata = test_data)
+        conf_matrix <- table(Predicted = pred, Actual = test_labels)
+        
+        # Calculate metrics
+        accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+        sensitivity <- conf_matrix["infiltrating", "infiltrating"] / sum(conf_matrix[, "infiltrating"])
+        specificity <- conf_matrix["non-infiltrating", "non-infiltrating"] / sum(conf_matrix[, "non-infiltrating"])
+        balanced_acc <- mean(c(sensitivity, specificity))
+        
+        tuning_results <- rbind(tuning_results, 
+                               data.frame(mtry = mtry, 
+                                        ntree = ntree,
+                                        accuracy = accuracy,
+                                        balanced_accuracy = balanced_acc))
+    }
+}
+
+# Find best parameters
+best_params <- tuning_results[which.max(tuning_results$balanced_accuracy), ]
+cat("\nBest Parameters:\n")
+print(best_params)
+
+# 2. Feature Selection and Final Model
+# Select top 500 features based on importance
+important_features <- names(sort(importance_scores[,1], decreasing=TRUE)[1:500])
+train_data_selected <- train_data[, important_features]
+test_data_selected <- test_data[, important_features]
+
+# Train final model with best parameters and selected features
+final_rf <- randomForest(x = train_data_selected, 
+                        y = as.factor(train_labels),
+                        ntree = best_params$ntree,
+                        mtry = best_params$mtry,
+                        importance = TRUE)
+
+# Make predictions
+final_predictions <- predict(final_rf, newdata = test_data_selected)
+
+# Calculate final performance metrics
+final_conf_matrix <- table(Predicted = final_predictions, Actual = test_labels)
+final_accuracy <- sum(diag(final_conf_matrix)) / sum(final_conf_matrix)
+final_sensitivity <- final_conf_matrix["infiltrating", "infiltrating"] / sum(final_conf_matrix[, "infiltrating"])
+final_specificity <- final_conf_matrix["non-infiltrating", "non-infiltrating"] / sum(final_conf_matrix[, "non-infiltrating"])
+final_balanced_acc <- mean(c(final_sensitivity, final_specificity))
+final_precision <- final_conf_matrix["infiltrating", "infiltrating"] / sum(final_conf_matrix["infiltrating", ])
+final_f1 <- 2 * (final_precision * final_sensitivity) / (final_precision + final_sensitivity)
+
+# Print final results
+cat("\nFinal Optimized Model Performance:\n")
+cat("--------------------------------\n")
+cat("Confusion Matrix:\n")
+print(final_conf_matrix)
+cat("\nPerformance Metrics:\n")
+cat("Overall Accuracy:", round(final_accuracy, 3), "\n")
+cat("Balanced Accuracy:", round(final_balanced_acc, 3), "\n")
+cat("Sensitivity (Infiltrating):", round(final_sensitivity, 3), "\n")
+cat("Specificity (Non-infiltrating):", round(final_specificity, 3), "\n")
+cat("Precision:", round(final_precision, 3), "\n")
+cat("F1 Score:", round(final_f1, 3), "\n")
+
+
+
+```
+
+
+The ROSE balancing approach has significantly changed the model's behavior, but not in a helpful way:
+Before ROSE (Original RF)
+Overall Accuracy: 0.830
+Sensitivity: 0.917
+Specificity: 0.699
+F1 Score: 0.867
+
+After ROSE
+Overall Accuracy: 0.565 (↓)
+Sensitivity: 0.298 (↓)
+Specificity: 0.970 (↑)
+F1 Score: 0.453 (↓)
+The ROSE balancing has:
+Dramatically reduced sensitivity
+Increased specificity
+Overall decreased performance
+
+
+# Xgboost Approach
+
+```{r}
+# 1. Data Preparation and Cleaning
+# First, find common features between train and test data
+common_features <- intersect(colnames(train_data), colnames(test_data))
+cat("Number of common features:", length(common_features), "\n")
+
+# Subset both datasets to use only common features
+train_data_clean <- train_data[valid_train_idx, common_features]
+test_data_clean <- test_data[valid_test_idx, common_features]
+
+# Clean and prepare labels
+train_labels_clean <- train_labels[valid_train_idx]
+test_labels_clean <- test_labels[valid_test_idx]
+
+# Convert labels to numeric
+train_labels_xgb <- as.numeric(factor(train_labels_clean)) - 1
+test_labels_xgb <- as.numeric(factor(test_labels_clean)) - 1
+
+# Verify dimensions and check for NAs
+cat("\nAfter alignment:")
+cat("\nTraining data dimensions:", dim(train_data_clean))
+cat("\nTest data dimensions:", dim(test_data_clean))
+cat("\nNA values in training labels:", sum(is.na(train_labels_xgb)))
+cat("\nNA values in test labels:", sum(is.na(test_labels_xgb)))
+
+# Create DMatrix objects
+dtrain <- xgb.DMatrix(data = as.matrix(train_data_clean), label = train_labels_xgb)
+dtest <- xgb.DMatrix(data = as.matrix(test_data_clean), label = test_labels_xgb)
+
+# 2. Set XGBoost Parameters
+params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    eta = 0.1,
+    max_depth = 6,
+    min_child_weight = 1,
+    subsample = 0.8,
+    colsample_bytree = 0.8
+)
+
+# 3. Train XGBoost Model
+set.seed(123)
+xgb_model <- xgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = 100,
+    watchlist = list(train = dtrain, test = dtest),
+    early_stopping_rounds = 10,
+    verbose = 1
+)
+
+# 4. Make Predictions
+xgb_pred_prob <- predict(xgb_model, dtest)
+xgb_predictions <- ifelse(xgb_pred_prob > 0.5, "non-infiltrating", "infiltrating")
+
+# 5. Calculate Performance Metrics
+conf_matrix_xgb <- table(
+    Predicted = xgb_predictions, 
+    Actual = test_labels_clean
+)
+
+# Calculate metrics
+accuracy_xgb <- sum(diag(conf_matrix_xgb)) / sum(conf_matrix_xgb)
+sensitivity_xgb <- conf_matrix_xgb["infiltrating", "infiltrating"] / sum(conf_matrix_xgb[, "infiltrating"])
+specificity_xgb <- conf_matrix_xgb["non-infiltrating", "non-infiltrating"] / sum(conf_matrix_xgb[, "non-infiltrating"])
+balanced_accuracy_xgb <- mean(c(sensitivity_xgb, specificity_xgb))
+precision_xgb <- conf_matrix_xgb["infiltrating", "infiltrating"] / sum(conf_matrix_xgb["infiltrating", ])
+f1_score_xgb <- 2 * (precision_xgb * sensitivity_xgb) / (precision_xgb + sensitivity_xgb)
+
+# Print results
+cat("\nXGBoost Model Performance:\n")
+cat("-------------------------\n")
+cat("Confusion Matrix:\n")
+print(conf_matrix_xgb)
+cat("\nPerformance Metrics:\n")
+cat("Overall Accuracy:", round(accuracy_xgb, 3), "\n")
+cat("Balanced Accuracy:", round(balanced_accuracy_xgb, 3), "\n")
+cat("Sensitivity (Infiltrating):", round(sensitivity_xgb, 3), "\n")
+cat("Specificity (Non-infiltrating):", round(specificity_xgb, 3), "\n")
+cat("Precision:", round(precision_xgb, 3), "\n")
+cat("F1 Score:", round(f1_score_xgb, 3), "\n")
+
+# Get feature importance
+importance_matrix <- xgb.importance(model = xgb_model)
+cat("\nTop 10 Most Important Features:\n")
+print(head(importance_matrix, 10))
+
+```
+
+
+```{r}
+
+library(ggplot2)
+library(gridExtra)
+library(reshape2)
+
+# Adjust plot margins and text sizes
+plot_theme <- theme_minimal() +
+    theme(
+        plot.title = element_text(size = 12, face = "bold", margin = margin(b = 10)),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11),
+        plot.margin = margin(20, 20, 20, 20)
+    )
+
+# 1. Confusion Matrix Visualization
+p1 <- ggplot(conf_matrix_data, aes(x = Actual, y = Predicted, fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = Freq), color = "black", size = 4) +
+    scale_fill_gradient(low = "white", high = "#FF9999") +
+    plot_theme +
+    labs(title = "XGBoost Confusion Matrix",
+         x = "Actual Class",
+         y = "Predicted Class")
+
+# 2. Performance Metrics Visualization
+p2 <- ggplot(metrics_data, aes(x = reorder(Metric, -Value), y = Value)) +
+    geom_bar(stat = "identity", fill = "#FF9999") +
+    coord_flip() +
+    plot_theme +
+    labs(title = "XGBoost Performance Metrics",
+         x = "",
+         y = "Score") +
+    geom_text(aes(label = sprintf("%.3f", Value)), hjust = -0.1, size = 3.5) +
+    scale_y_continuous(limits = c(0, 1.1))  # Extend y-axis limit to show all labels
+
+# 3. Feature Importance Plot
+p3 <- ggplot(importance_data, aes(x = reorder(sprintf("m/z %.2f", mz), Importance), y = Importance)) +
+    geom_bar(stat = "identity", fill = "#FF9999") +
+    coord_flip() +
+    plot_theme +
+    labs(title = "Top 10 Important Features",
+         x = "m/z Value",
+         y = "Importance Score") +
+    geom_text(aes(label = sprintf("%.3f", Importance)), hjust = -0.1, size = 3.5) +
+    scale_y_continuous(limits = c(0, max(importance_data$Importance) * 1.2))  # Extend y-axis limit
+
+# 4. Training Progress Plot
+p4 <- ggplot(train_log_long, aes(x = Iteration, y = value, color = variable)) +
+    geom_line(size = 1) +
+    plot_theme +
+    theme(legend.position = "bottom") +
+    labs(title = "XGBoost Training Progress",
+         y = "AUC Score") +
+    scale_color_manual(values = c("Train_AUC" = "#FF9999", "Test_AUC" = "#66B2FF"),
+                      labels = c("Train AUC", "Test AUC"))
+
+# Arrange plots with more space
+grid.arrange(
+    p1, p2, p3, p4, 
+    ncol = 2,
+    widths = c(1, 1),
+    heights = c(1, 1),
+    layout_matrix = rbind(c(1,2), c(3,4)),
+    top = "XGBoost Model Analysis"
+)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
